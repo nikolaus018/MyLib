@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 use std::process::Command;
 use uuid::Uuid;
@@ -22,6 +22,7 @@ use sysinfo::System;
 
 pub enum AppEvent {
     Ipc(String),
+    DispatchToWebView(String),
     PollGames,
     GamepadInput(String),
     CloseWindow,
@@ -67,7 +68,8 @@ fn start_http_server() -> Option<u16> {
 }
 
 fn handle_http_get(stream: &mut TcpStream, raw_path: &str, base_dir: &PathBuf) {
-    let decoded = percent_encoding::percent_decode_str(raw_path).decode_utf8_lossy().to_string();
+    let path_without_query = raw_path.split('?').next().unwrap_or(raw_path);
+    let decoded = percent_encoding::percent_decode_str(path_without_query).decode_utf8_lossy().to_string();
     let file_path_str = decoded.trim_start_matches('/');
     
     let target = base_dir.join(file_path_str);
@@ -230,6 +232,10 @@ enum ResMessage {
     GameStatus { id: String, status: String },
     #[serde(rename = "gamepad_input")]
     GamepadInput { action: String },
+    #[serde(rename = "artwork_fetched")]
+    ArtworkFetched { game_id: String, logo_path: Option<String>, banner_path: Option<String> },
+    #[serde(rename = "artwork_error")]
+    ArtworkError { error: String },
 }
 
 #[derive(Deserialize, Debug)]
@@ -269,6 +275,10 @@ enum ReqMessage {
     WindowClose,
     #[serde(rename = "window_resize")]
     WindowResize { direction: String },
+    #[serde(rename = "haptic")]
+    Haptic { duration_ms: u32, strong: bool },
+    #[serde(rename = "fetch_artwork")]
+    FetchArtwork { game_id: Option<String>, name: String },
 }
 
 struct App {
@@ -282,10 +292,12 @@ struct App {
     is_focused: bool,
     tray_icon: Option<tray_icon::TrayIcon>,
     cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+    haptic_tx: std::sync::mpsc::Sender<(u32, bool)>,
+    haptic_rx: Option<std::sync::mpsc::Receiver<(u32, bool)>>,
 }
 
 impl App {
-    fn new(proxy: winit::event_loop::EventLoopProxy<AppEvent>) -> Self {
+    fn new(proxy: winit::event_loop::EventLoopProxy<AppEvent>, haptic_tx: std::sync::mpsc::Sender<(u32, bool)>, haptic_rx: std::sync::mpsc::Receiver<(u32, bool)>) -> Self {
         let http_port = start_http_server().expect("Failed to start local HTTP server");
         Self {
             window: None,
@@ -298,6 +310,8 @@ impl App {
             is_focused: true,
             tray_icon: None,
             cursor_pos: None,
+            haptic_tx,
+            haptic_rx: Some(haptic_rx),
         }
     }
 
@@ -713,6 +727,118 @@ impl App {
                         let _ = window.drag_resize_window(dir);
                     }
                 }
+                ReqMessage::Haptic { duration_ms, strong } => {
+                    let _ = self.haptic_tx.send((duration_ms, strong));
+                }
+                ReqMessage::FetchArtwork { game_id, name } => {
+                    let mut game_dir = None;
+                    if let Some(state) = &self.state {
+                        let g_id = game_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                        game_dir = Some((g_id.clone(), state.game_assets_dir(&g_id)));
+                    }
+                    let proxy = self.proxy.clone();
+                    std::thread::spawn(move || {
+                        let (g_id, dir) = match game_dir {
+                            Some(d) => d,
+                            None => return,
+                        };
+                        let key = "74582d73206b61c9a8073bdcccdc9136";
+                        
+                        #[derive(Deserialize)] struct SearchRes { data: Vec<SgdGame> }
+                        #[derive(Deserialize)] struct SgdGame { id: u32 }
+                        #[derive(Deserialize)] struct ImageRes { data: Vec<SgdImage> }
+                        #[derive(Deserialize)] struct SgdImage { url: String }
+                        let client = match reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(15)).build() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                println!("Failed to build reqwest client: {}", e);
+                                let _ = proxy.send_event(AppEvent::DispatchToWebView(serde_json::to_string(&ResMessage::ArtworkError { error: format!("Internal client error: {}", e) }).unwrap()));
+                                return;
+                            }
+                        };
+                        
+                        let url = format!("https://www.steamgriddb.com/api/v2/search/autocomplete/{}", percent_encoding::percent_encode(name.as_bytes(), percent_encoding::NON_ALPHANUMERIC));
+                        println!("Fetching artwork for: {} at {}", name, url);
+                        
+                        let resp = match client.get(&url).header("Authorization", format!("Bearer {}", key)).send() {
+                            Ok(r) => r,
+                            Err(e) => {
+                                println!("Reqwest error: {}", e);
+                                let _ = proxy.send_event(AppEvent::DispatchToWebView(serde_json::to_string(&ResMessage::ArtworkError { error: format!("Network error: {}", e) }).unwrap()));
+                                return;
+                            }
+                        };
+                        println!("Search API status: {}", resp.status());
+                        let s_res: SearchRes = match resp.json() {
+                            Ok(j) => j,
+                            Err(e) => {
+                                println!("Search JSON parse error: {}", e);
+                                let _ = proxy.send_event(AppEvent::DispatchToWebView(serde_json::to_string(&ResMessage::ArtworkError { error: "Failed to parse search response".into() }).unwrap()));
+                                return;
+                            }
+                        };
+                        let sgd_id = match s_res.data.first() {
+                            Some(g) => {
+                                println!("Found game ID: {}", g.id);
+                                g.id
+                            },
+                            None => {
+                                println!("Game not found in SearchRes");
+                                let _ = proxy.send_event(AppEvent::DispatchToWebView(serde_json::to_string(&ResMessage::ArtworkError { error: "Game not found on SteamGridDB".into() }).unwrap()));
+                                return;
+                            }
+                        };
+
+                        let _ = std::fs::create_dir_all(&dir);
+
+                        let mut final_logo = None;
+                        println!("Fetching logo...");
+                        if let Ok(resp) = client.get(&format!("https://www.steamgriddb.com/api/v2/logos/game/{}?styles=official,custom", sgd_id)).header("Authorization", format!("Bearer {}", key)).send() {
+                            if let Ok(res) = resp.json::<ImageRes>() {
+                                if let Some(img) = res.data.first() {
+                                    println!("Found logo URL: {}", img.url);
+                                    if let Ok(mut r) = client.get(&img.url).send() {
+                                        let mut buf = Vec::new();
+                                        if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
+                                            let ext = img.url.split('.').last().unwrap_or("png");
+                                            let path = dir.join(format!("logo.{}", ext));
+                                            if std::fs::write(&path, &buf).is_ok() {
+                                                println!("Logo saved to {:?}", path);
+                                                final_logo = Some(path.to_string_lossy().to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut final_banner = None;
+                        println!("Fetching banner...");
+                        if let Ok(resp) = client.get(&format!("https://www.steamgriddb.com/api/v2/heroes/game/{}?styles=alternate,material", sgd_id)).header("Authorization", format!("Bearer {}", key)).send() {
+                            if let Ok(res) = resp.json::<ImageRes>() {
+                                if let Some(img) = res.data.first() {
+                                    println!("Found banner URL: {}", img.url);
+                                    if let Ok(mut r) = client.get(&img.url).send() {
+                                        let mut buf = Vec::new();
+                                        if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
+                                            let ext = img.url.split('.').last().unwrap_or("png");
+                                            let path = dir.join(format!("banner.{}", ext));
+                                            if std::fs::write(&path, &buf).is_ok() {
+                                                println!("Banner saved to {:?}", path);
+                                                final_banner = Some(path.to_string_lossy().to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        println!("Sending ArtworkFetched to UI");
+                        
+                        let msg = ResMessage::ArtworkFetched { game_id: g_id, logo_path: final_logo, banner_path: final_banner };
+                        let _ = proxy.send_event(AppEvent::DispatchToWebView(serde_json::to_string(&msg).unwrap()));
+                    });
+                }
             }
         }
     }
@@ -772,8 +898,9 @@ impl ApplicationHandler<AppEvent> for App {
             });
             
             let gamepad_proxy = self.proxy.clone();
+            let h_rx = self.haptic_rx.take().unwrap();
             std::thread::spawn(move || {
-                start_gilrs_polling(gamepad_proxy);
+                start_gilrs_polling(gamepad_proxy, h_rx);
             });
             
             let builder = WebViewBuilder::new();
@@ -870,6 +997,12 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Ipc(msg_str) => {
                 self.handle_ipc_message(msg_str);
             }
+            AppEvent::DispatchToWebView(json) => {
+                if let Some(wv) = &self.webview {
+                    let js = format!("window.receiveMessage(String.raw`{}`);", json.replace("`", "\\`"));
+                    let _ = wv.evaluate_script(&js);
+                }
+            }
             AppEvent::PollGames => {
                 self.poll_running_games();
                 
@@ -938,13 +1071,15 @@ pub fn main() {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy);
+    let (haptic_tx, haptic_rx) = std::sync::mpsc::channel();
+    let mut app = App::new(proxy, haptic_tx, haptic_rx);
     
     event_loop.run_app(&mut app).unwrap();
 }
 
-fn start_gilrs_polling(proxy: winit::event_loop::EventLoopProxy<AppEvent>) {
+fn start_gilrs_polling(proxy: winit::event_loop::EventLoopProxy<AppEvent>, haptic_rx: std::sync::mpsc::Receiver<(u32, bool)>) {
     use gilrs::{Gilrs, Event, EventType, Button};
+    use gilrs::ff::{EffectBuilder, Replay, BaseEffect, BaseEffectType, Ticks};
     let mut gilrs = match Gilrs::new() {
         Ok(g) => g,
         Err(_) => return,
@@ -956,8 +1091,12 @@ fn start_gilrs_polling(proxy: winit::event_loop::EventLoopProxy<AppEvent>) {
     let mut last_axis_left = false;
     let mut last_axis_right = false;
 
+    let mut last_active_gamepad = None;
+    let mut _active_effect: Option<gilrs::ff::Effect> = None;
+
     loop {
-        while let Some(Event { event, .. }) = gilrs.next_event() {
+        while let Some(Event { id, event, .. }) = gilrs.next_event() {
+            last_active_gamepad = Some(id);
             match event {
                 EventType::ButtonPressed(Button::DPadUp, _) => { let _ = proxy.send_event(AppEvent::GamepadInput("up".to_string())); }
                 EventType::ButtonPressed(Button::DPadDown, _) => { let _ = proxy.send_event(AppEvent::GamepadInput("down".to_string())); }
@@ -992,6 +1131,25 @@ fn start_gilrs_polling(proxy: winit::event_loop::EventLoopProxy<AppEvent>) {
                 _ => {}
             }
         }
+        
+        while let Ok((duration_ms, strong)) = haptic_rx.try_recv() {
+            if let Some(gp_id) = last_active_gamepad {
+                let mag = if strong { 60_000 } else { 20_000 };
+                let effect = EffectBuilder::new()
+                    .add_effect(BaseEffect {
+                        kind: BaseEffectType::Strong { magnitude: mag },
+                        scheduling: Replay { play_for: Ticks::from_ms(duration_ms), ..Default::default() },
+                        envelope: Default::default()
+                    })
+                    .gamepads(&[gp_id])
+                    .finish(&mut gilrs);
+                if let Ok(eff) = effect {
+                    let _ = eff.play();
+                    _active_effect = Some(eff);
+                }
+            }
+        }
+        
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }

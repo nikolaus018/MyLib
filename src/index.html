@@ -43,6 +43,8 @@
             position: relative;
         }
 
+
+
         /* ── Ambient glows ── */
         .ambient-glow {
             position: fixed;
@@ -89,10 +91,9 @@
             position: absolute; inset: 0;
             width: 100%; height: 100%;
             object-fit: cover; z-index: 0;
-            /* Single-direction mask — WebView2 compatible (no mask-composite) */
-            -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 35%, rgba(0,0,0,0.85) 65%, black 100%);
-            mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 35%, rgba(0,0,0,0.85) 65%, black 100%);
-            opacity: 0.38;
+            -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.7) 40%, black 100%);
+            mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.7) 40%, black 100%);
+            opacity: 0.7;
             transition: opacity 0.7s ease, transform 1.1s cubic-bezier(0.16,1,0.3,1);
             pointer-events: none;
             animation: slow-zoom 30s alternate infinite linear;
@@ -792,7 +793,7 @@
     </div>
 
     <div id="main-area">
-        <img id="banner-img" src="" alt="" onerror="this.style.display='none'">
+        <img id="banner-img" src="" alt="">
 
         <div id="stage-top-right">
             <div class="tr-game-name" id="tr-game-name">Cyberpunk 2077</div>
@@ -850,6 +851,7 @@
         <div id="modal">
             <div id="modal-title-row">
                 <h2 id="modal-title">Add Game</h2>
+                <div id="modal-fetch-btn" class="btn btn-ghost navigable" style="padding:8px 14px; font-size:9px;">✨ Fetch Artwork</div>
             </div>
             <div class="form-group">
                 <label>Game Name</label>
@@ -918,6 +920,43 @@
     </div>
 
     <script>
+        // ── Audio Synthesis ──
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playUiSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            if (type === 'navigate') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(200, now + 0.05);
+                gain.gain.setValueAtTime(0.05, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+            } else if (type === 'select') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            } else if (type === 'back') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            }
+        }
+
         let games = [];
         let displayGames = []; // sorted + filtered view
         let runningGames = new Set();
@@ -1004,6 +1043,19 @@
                             if (g) openModal(g);
                         }
                     }
+                } else if (msg.type === "artwork_fetched") {
+                    document.getElementById('modal-fetch-btn').innerText = "✨ Fetch Artwork";
+                    if (msg.logo_path) {
+                        logoPath = msg.logo_path;
+                        document.getElementById('game-logo-path').innerText = logoPath;
+                    }
+                    if (msg.banner_path) {
+                        bannerPath = msg.banner_path;
+                        document.getElementById('game-banner-path').innerText = bannerPath;
+                    }
+                } else if (msg.type === "artwork_error") {
+                    document.getElementById('modal-fetch-btn').innerText = "✨ Fetch Artwork";
+                    alert("Artwork fetch failed: " + msg.error);
                 }
             } catch (e) {
                 console.error("Failed to parse IPC message", e);
@@ -1020,12 +1072,13 @@
         }
 
         const IS_WINDOWS = navigator.userAgent.includes('Windows');
+        let assetVersion = Date.now();
         function assetUrl(path) {
             if (!path) return "";
             const clean = path.replace(/\\/g, '/');
             const encoded = clean.split('/').map(encodeURIComponent).join('/');
-            if (serverPort) return `http://127.0.0.1:${serverPort}/${encoded}`;
-            return (IS_WINDOWS ? "https://asset.localhost/" : "asset://localhost/") + encoded;
+            const base = serverPort ? `http://127.0.0.1:${serverPort}/${encoded}` : (IS_WINDOWS ? "https://asset.localhost/" : "asset://localhost/") + encoded;
+            return base + `?v=${assetVersion}`;
         }
 
         // ── Helpers ──
@@ -1337,6 +1390,8 @@
         }
 
         function handleNavigate(direction) {
+            playUiSound('navigate');
+            sendToRust({ type: 'haptic', duration_ms: 10, strong: false });
             if (navigables.length === 0) return;
             const currentEl = navigables[focusIndex];
 
@@ -1419,6 +1474,8 @@
         }
 
         function handleSelect() {
+            playUiSound('select');
+            sendToRust({ type: 'haptic', duration_ms: 20, strong: true });
             if (navigables.length === 0) return;
             const el = navigables[focusIndex];
             if (el.classList.contains('case')) {
@@ -1479,10 +1536,20 @@
                 updateNavigables();
                 sortMenu.classList.add('open');
                 setTimeout(() => sortMenu.classList.remove('open'), 1000);
+            } else if (el.id === 'modal-fetch-btn') {
+                const name = document.getElementById('game-name-input').value.trim();
+                if (!name) {
+                    triggerInvalid(document.getElementById('game-name-input'));
+                    return;
+                }
+                document.getElementById('modal-fetch-btn').innerText = "Fetching...";
+                sendToRust({ type: 'fetch_artwork', game_id: editingGameId, name });
             }
         }
 
         function handleBack() {
+            playUiSound('back');
+            sendToRust({ type: 'haptic', duration_ms: 20, strong: false });
             if (isConfirmOpen) {
                 closeConfirm();
             } else if (isModalOpen) {
@@ -1568,6 +1635,7 @@
                 logo_path: logoPath || null,
                 banner_path: bannerPath || null
             });
+            assetVersion = Date.now(); // Force webview to reload new images
             closeModal();
         }
 
@@ -1656,6 +1724,7 @@
         document.getElementById('modal-cancel-btn').onclick = () => closeModal();
         document.getElementById('modal-save-btn').onclick = () => saveGame();
         document.getElementById('modal-delete-btn').onclick = () => promptDelete();
+        document.getElementById('modal-fetch-btn').onclick = () => { setFocusTo(document.getElementById('modal-fetch-btn')); handleSelect(); };
 
         window.addEventListener('contextmenu', e => e.preventDefault());
 
