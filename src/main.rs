@@ -29,6 +29,16 @@ pub enum AppEvent {
     ToggleWindow,
 }
 
+fn is_safe_path(file_path_str: &str) -> bool {
+    for c in std::path::Path::new(file_path_str).components() {
+        match c {
+            std::path::Component::Normal(_) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 fn get_base_games_dir() -> PathBuf {
     match ProjectDirs::from("com", "MyLib", "MyLib") {
         Some(proj_dirs) => proj_dirs.data_local_dir().join("games"),
@@ -43,39 +53,35 @@ fn start_http_server() -> Option<u16> {
     let base_dir = get_base_games_dir();
     
     thread::spawn(move || {
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                let base_dir_clone = base_dir.clone();
-                thread::spawn(move || {
-                    let mut buffer = [0; 4096];
-                    if let Ok(size) = stream.read(&mut buffer) {
-                        let request_str = String::from_utf8_lossy(&buffer[..size]);
-                        let mut lines = request_str.lines();
-                        if let Some(req_line) = lines.next() {
-                            let parts: Vec<&str> = req_line.split_whitespace().collect();
-                            if parts.len() >= 2 && parts[0] == "GET" {
-                                let path = parts[1];
-                                handle_http_get(&mut stream, path, &base_dir_clone);
-                            }
+        for mut stream in listener.incoming().flatten() {
+            let base_dir_clone = base_dir.clone();
+            thread::spawn(move || {
+                let mut buffer = [0; 4096];
+                if let Ok(size) = stream.read(&mut buffer) {
+                    let request_str = String::from_utf8_lossy(&buffer[..size]);
+                    let mut lines = request_str.lines();
+                    if let Some(req_line) = lines.next() {
+                        let parts: Vec<&str> = req_line.split_whitespace().collect();
+                        if parts.len() >= 2 && parts[0] == "GET" {
+                            let path = parts[1];
+                            handle_http_get(&mut stream, path, &base_dir_clone);
                         }
                     }
-                });
-            }
+                }
+            });
         }
     });
     
     Some(port)
 }
 
-fn handle_http_get(stream: &mut TcpStream, raw_path: &str, base_dir: &PathBuf) {
+fn handle_http_get(stream: &mut TcpStream, raw_path: &str, base_dir: &std::path::Path) {
     let path_without_query = raw_path.split('?').next().unwrap_or(raw_path);
     let decoded = percent_encoding::percent_decode_str(path_without_query).decode_utf8_lossy().to_string();
     let file_path_str = decoded.trim_start_matches('/');
     
     let target = base_dir.join(file_path_str);
-    let is_safe = target.canonicalize().and_then(|canon_target| {
-        base_dir.canonicalize().map(|canon_base| canon_target.starts_with(&canon_base))
-    }).unwrap_or(false);
+    let is_safe = is_safe_path(file_path_str);
 
     if !is_safe {
         let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -146,6 +152,12 @@ pub struct LibraryState {
     pub data_path: PathBuf,
 }
 
+impl Default for LibraryState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LibraryState {
     pub fn new() -> Self {
         let path = match ProjectDirs::from("com", "MyLib", "MyLib") {
@@ -191,10 +203,9 @@ impl LibraryState {
                 return false;
             }
         };
-        if let Some(parent) = self.data_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
+        if let Some(parent) = self.data_path.parent()
+            && let Err(e) = fs::create_dir_all(parent) {
                 eprintln!("Failed to ensure data dir '{}' exists: {}", parent.display(), e);
-            }
         }
         let tmp_path = self.data_path.with_extension("json.tmp");
         if let Err(e) = fs::write(&tmp_path, &content) {
@@ -331,11 +342,10 @@ impl App {
     }
 
     fn send_to_webview(&self, msg: &ResMessage) {
-        if let Some(wv) = &self.webview {
-            if let Ok(json) = serde_json::to_string(msg) {
+        if let Some(wv) = &self.webview
+            && let Ok(json) = serde_json::to_string(msg) {
                 let js = format!("window.receiveMessage(String.raw`{}`);", json.replace("`", "\\`"));
                 let _ = wv.evaluate_script(&js);
-            }
         }
     }
 
@@ -360,10 +370,9 @@ impl App {
                         let exe_name_lower = exe_name.to_lowercase();
                         
                         let mut is_running = false;
-                        if let Some(pid) = tracked_pid {
-                            if self.sys.process(sysinfo::Pid::from_u32(*pid)).is_some() {
+                        if let Some(pid) = tracked_pid
+                            && self.sys.process(sysinfo::Pid::from_u32(*pid)).is_some() {
                                 is_running = true;
-                            }
                         }
                         
                         if !is_running {
@@ -459,16 +468,21 @@ impl App {
                                 }
                                 Err(e) => {
                                     eprintln!("Failed to launch natively {}: {}", game.exe_path, e);
-                                    let script = format!("Start-Process '{}' -Verb RunAs", game.exe_path.replace("'", "''"));
+                                    let script = format!("(Start-Process '{}' -Verb RunAs -PassThru).Id", game.exe_path.replace("'", "''"));
                                     let mut ps = std::process::Command::new("powershell");
                                     ps.creation_flags(0x08000000); // Hide powershell terminal window
-                                    ps.args(&["-NoProfile", "-Command", &script]);
+                                    ps.args(["-NoProfile", "-Command", &script]);
                                     if current_dir.exists() && current_dir.is_dir() {
                                         ps.current_dir(current_dir);
                                     }
-                                    if let Ok(_) = ps.spawn() {
+                                    if let Ok(output) = ps.output() {
+                                        let stdout = String::from_utf8_lossy(&output.stdout);
+                                        let mut pid_opt = None;
+                                        if let Ok(pid) = stdout.trim().parse::<u32>() {
+                                            pid_opt = Some(pid);
+                                        }
                                         let now = std::time::Instant::now();
-                                        self.running_games.insert(id.clone(), (now, now, None));
+                                        self.running_games.insert(id.clone(), (now, now, pid_opt));
                                         self.send_to_webview(&ResMessage::GameStatus {
                                             id: id.clone(),
                                             status: "running".to_string(),
@@ -492,10 +506,9 @@ impl App {
                                     
                                     // Find descendants
                                     for (p_id, proc) in self.sys.processes() {
-                                        if let Some(parent_id) = proc.parent() {
-                                            if to_kill.contains(&parent_id) {
+                                        if let Some(parent_id) = proc.parent()
+                                            && to_kill.contains(&parent_id) {
                                                 to_kill.push(*p_id);
-                                            }
                                         }
                                     }
                                     
@@ -571,8 +584,8 @@ impl App {
                         let mut stored_logo = existing.as_ref().and_then(|g| g.logo_path.clone());
                         let mut stored_banner = existing.as_ref().and_then(|g| g.banner_path.clone());
 
-                        if let Some(ref path) = logo_path {
-                            if path != stored_logo.as_deref().unwrap_or("") {
+                        if let Some(ref path) = logo_path
+                            && path != stored_logo.as_deref().unwrap_or("") {
                                 if let Ok(entries) = std::fs::read_dir(&game_dir) {
                                     for entry in entries.flatten() {
                                         if entry.path().file_stem().and_then(|s| s.to_str()) == Some("logo") {
@@ -591,11 +604,10 @@ impl App {
                                 } else {
                                     stored_logo = None;
                                 }
-                            }
                         }
 
-                        if let Some(ref path) = banner_path {
-                            if path != stored_banner.as_deref().unwrap_or("") {
+                        if let Some(ref path) = banner_path
+                            && path != stored_banner.as_deref().unwrap_or("") {
                                 if let Ok(entries) = std::fs::read_dir(&game_dir) {
                                     for entry in entries.flatten() {
                                         if entry.path().file_stem().and_then(|s| s.to_str()) == Some("banner") {
@@ -614,7 +626,6 @@ impl App {
                                 } else {
                                     stored_banner = None;
                                 }
-                            }
                         }
 
                         let old_exe = existing.as_ref().map(|g| g.exe_path.as_str()).unwrap_or("");
@@ -627,7 +638,7 @@ impl App {
                             );
                             let mut ps = Command::new("powershell");
                             ps.creation_flags(0x08000000);
-                            ps.args(&["-NoProfile", "-Command", &script]);
+                            ps.args(["-NoProfile", "-Command", &script]);
                             let _ = ps.output();
                             if final_logo_path.exists() {
                                 stored_logo = Some(final_logo_path.to_string_lossy().to_string());
@@ -687,7 +698,7 @@ impl App {
                                 // If the window restores to 800 width, we want the cursor to roughly be in the same relative X
                                 // However, simple approach: just put the window's top center at the cursor.
                                 let size = window.outer_size();
-                                let mut pos = cursor_pos.clone();
+                                let mut pos = cursor_pos;
                                 // Assuming titlebar height is ~32px, place top-left so cursor is in the titlebar.
                                 pos.x -= (size.width as f64) / 2.0;
                                 pos.y -= 10.0;
@@ -793,44 +804,40 @@ impl App {
 
                         let mut final_logo = None;
                         println!("Fetching logo...");
-                        if let Ok(resp) = client.get(&format!("https://www.steamgriddb.com/api/v2/logos/game/{}?styles=official,custom", sgd_id)).header("Authorization", format!("Bearer {}", key)).send() {
-                            if let Ok(res) = resp.json::<ImageRes>() {
-                                if let Some(img) = res.data.first() {
-                                    println!("Found logo URL: {}", img.url);
-                                    if let Ok(mut r) = client.get(&img.url).send() {
-                                        let mut buf = Vec::new();
-                                        if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
-                                            let ext = img.url.split('.').last().unwrap_or("png");
-                                            let path = dir.join(format!("logo.{}", ext));
-                                            if std::fs::write(&path, &buf).is_ok() {
-                                                println!("Logo saved to {:?}", path);
-                                                final_logo = Some(path.to_string_lossy().to_string());
-                                            }
+                        if let Ok(resp) = client.get(format!("https://www.steamgriddb.com/api/v2/logos/game/{}?styles=official,custom", sgd_id)).header("Authorization", format!("Bearer {}", key)).send()
+                            && let Ok(res) = resp.json::<ImageRes>()
+                            && let Some(img) = res.data.first() {
+                                println!("Found logo URL: {}", img.url);
+                                if let Ok(mut r) = client.get(&img.url).send() {
+                                    let mut buf = Vec::new();
+                                    if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
+                                        let ext = img.url.split('.').next_back().unwrap_or("png");
+                                        let path = dir.join(format!("logo.{}", ext));
+                                        if std::fs::write(&path, &buf).is_ok() {
+                                            println!("Logo saved to {:?}", path);
+                                            final_logo = Some(path.to_string_lossy().to_string());
                                         }
                                     }
                                 }
-                            }
                         }
 
                         let mut final_banner = None;
                         println!("Fetching banner...");
-                        if let Ok(resp) = client.get(&format!("https://www.steamgriddb.com/api/v2/heroes/game/{}?styles=alternate,material", sgd_id)).header("Authorization", format!("Bearer {}", key)).send() {
-                            if let Ok(res) = resp.json::<ImageRes>() {
-                                if let Some(img) = res.data.first() {
-                                    println!("Found banner URL: {}", img.url);
-                                    if let Ok(mut r) = client.get(&img.url).send() {
-                                        let mut buf = Vec::new();
-                                        if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
-                                            let ext = img.url.split('.').last().unwrap_or("png");
-                                            let path = dir.join(format!("banner.{}", ext));
-                                            if std::fs::write(&path, &buf).is_ok() {
-                                                println!("Banner saved to {:?}", path);
-                                                final_banner = Some(path.to_string_lossy().to_string());
-                                            }
+                        if let Ok(resp) = client.get(format!("https://www.steamgriddb.com/api/v2/heroes/game/{}?styles=alternate,material", sgd_id)).header("Authorization", format!("Bearer {}", key)).send()
+                            && let Ok(res) = resp.json::<ImageRes>()
+                            && let Some(img) = res.data.first() {
+                                println!("Found banner URL: {}", img.url);
+                                if let Ok(mut r) = client.get(&img.url).send() {
+                                    let mut buf = Vec::new();
+                                    if std::io::Read::read_to_end(&mut r, &mut buf).is_ok() {
+                                        let ext = img.url.split('.').next_back().unwrap_or("png");
+                                        let path = dir.join(format!("banner.{}", ext));
+                                        if std::fs::write(&path, &buf).is_ok() {
+                                            println!("Banner saved to {:?}", path);
+                                            final_banner = Some(path.to_string_lossy().to_string());
                                         }
                                     }
                                 }
-                            }
                         }
                         
                         println!("Sending ArtworkFetched to UI");
@@ -917,9 +924,7 @@ impl ApplicationHandler<AppEvent> for App {
                     
                     let base_dir = get_base_games_dir();
                     let target = base_dir.join(file_path_str);
-                    let is_safe = target.canonicalize().and_then(|canon_target| {
-                        base_dir.canonicalize().map(|canon_base| canon_target.starts_with(&canon_base))
-                    }).unwrap_or(false);
+                    let is_safe = is_safe_path(file_path_str);
 
                     if !is_safe {
                         return wry::http::Response::builder()
@@ -1006,16 +1011,13 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::PollGames => {
                 self.poll_running_games();
                 
-                if let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-                    if let tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. } = event {
-                        if let Some(window) = &self.window {
-                            if window.is_visible().unwrap_or(false) && self.is_focused {
-                                window.set_visible(false);
-                            } else {
-                                self.show_centered();
-                            }
+                if let Ok(tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. }) = tray_icon::TrayIconEvent::receiver().try_recv()
+                    && let Some(window) = &self.window {
+                        if window.is_visible().unwrap_or(false) && self.is_focused {
+                            window.set_visible(false);
+                        } else {
+                            self.show_centered();
                         }
-                    }
                 }
                 if let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
                     if event.id.0 == "show" {

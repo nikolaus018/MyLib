@@ -711,6 +711,56 @@
         .resize-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: sw-resize; }
         .resize-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: se-resize; }
 
+        /* ── Launch Overlay ── */
+        #launch-overlay {
+            position: fixed; inset: 0; z-index: 5000;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(7, 8, 11, 0.95);
+            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            opacity: 0; transition: opacity 0.5s ease;
+        }
+        #launch-overlay.show { opacity: 1; }
+        #launch-bg {
+            position: absolute; inset: 0; z-index: -1;
+            background-size: cover; background-position: center;
+            opacity: 0.15; filter: blur(30px) saturate(0.8);
+            transform: scale(1.1);
+        }
+        #launch-content {
+            display: flex; flex-direction: column; align-items: center;
+            animation: fade-in-up-slow 0.6s cubic-bezier(0.16,1,0.3,1);
+        }
+        @keyframes fade-in-up-slow {
+            from { transform: translateY(30px); opacity: 0; }
+            to   { transform: translateY(0); opacity: 1; }
+        }
+        #launch-logo {
+            max-width: 300px; max-height: 120px; object-fit: contain; margin-bottom: 24px;
+            filter: drop-shadow(0 12px 28px rgba(0,0,0,0.9));
+        }
+        #launch-title {
+            font-family: var(--display-font); font-size: 42px; font-weight: 900;
+            color: #ffffff; letter-spacing: 2px; margin-bottom: 30px;
+            text-shadow: 0 4px 24px rgba(0,0,0,0.9); text-align: center;
+        }
+        .launch-spinner {
+            width: 40px; height: 40px; border-radius: 50%;
+            border: 3px solid rgba(229,193,88,0.15);
+            border-top-color: var(--brass-bright);
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .launch-text {
+            font-size: 13px; font-weight: 800; letter-spacing: 4px;
+            text-transform: uppercase; color: var(--brass);
+            animation: pulse-launch 2s infinite alternate ease-in-out;
+        }
+        @keyframes pulse-launch {
+            0% { opacity: 0.5; filter: drop-shadow(0 0 5px rgba(229,193,88,0.2)); }
+            100% { opacity: 1; filter: drop-shadow(0 0 15px rgba(229,193,88,0.6)); }
+        }
+
         /* ── Gamepad HUD ── */
         #gamepad-hud {
             position: fixed; bottom: 24px; right: 28px;
@@ -897,6 +947,17 @@
                 <div id="confirm-cancel-btn" class="btn btn-ghost navigable">Keep It</div>
                 <div id="confirm-delete-btn" class="btn btn-danger navigable">Remove</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Launch Overlay -->
+    <div id="launch-overlay">
+        <div id="launch-bg"></div>
+        <div id="launch-content">
+            <img id="launch-logo" src="" alt="">
+            <div id="launch-title"></div>
+            <div class="launch-spinner"></div>
+            <div class="launch-text">Launching...</div>
         </div>
     </div>
 
@@ -1088,6 +1149,43 @@
         }
         function getSelectedGame() {
             return displayGames[selectedIndex] || null;
+        }
+
+        function triggerLaunch(game) {
+            if (!game) return;
+            const overlay = document.getElementById('launch-overlay');
+            const bg = document.getElementById('launch-bg');
+            const logo = document.getElementById('launch-logo');
+            const title = document.getElementById('launch-title');
+
+            if (game.banner_path) {
+                bg.style.backgroundImage = `url("${assetUrl(game.banner_path)}")`;
+            } else {
+                bg.style.backgroundImage = 'none';
+            }
+
+            if (game.logo_path) {
+                logo.src = assetUrl(game.logo_path);
+                logo.style.display = 'block';
+                title.style.display = 'none';
+            } else {
+                logo.style.display = 'none';
+                title.innerText = game.name;
+                title.style.display = 'block';
+            }
+
+            overlay.style.display = 'flex';
+            setTimeout(() => overlay.classList.add('show'), 10);
+
+            sendToRust({ type: 'launch_game', id: game.id });
+
+            setTimeout(() => {
+                sendToRust({ type: 'window_close' });
+                setTimeout(() => {
+                    overlay.classList.remove('show');
+                    setTimeout(() => overlay.style.display = 'none', 500);
+                }, 500);
+            }, 4000);
         }
 
         function formatPlaytime(seconds) {
@@ -1488,11 +1586,7 @@
                     }
                 }, 50);
             } else if (el.id === 'play-btn') {
-                const g = getSelectedGame();
-                if (g) {
-                    sendToRust({ type: 'launch_game', id: g.id });
-                    sendToRust({ type: 'window_close' });
-                }
+                triggerLaunch(getSelectedGame());
             } else if (el.id === 'stop-btn') {
                 const g = getSelectedGame();
                 if (g) sendToRust({ type: 'stop_game', id: g.id });
@@ -1702,11 +1796,7 @@
         });
 
         document.getElementById('play-btn').onclick = () => {
-            const g = getSelectedGame();
-            if (g) {
-                sendToRust({ type: 'launch_game', id: g.id });
-                sendToRust({ type: 'window_close' });
-            }
+            triggerLaunch(getSelectedGame());
         };
         document.getElementById('stop-btn').onclick = () => {
             const g = getSelectedGame();
