@@ -29,14 +29,28 @@ pub enum AppEvent {
     ToggleWindow,
 }
 
-fn is_safe_path(file_path_str: &str) -> bool {
-    for c in std::path::Path::new(file_path_str).components() {
-        match c {
-            std::path::Component::Normal(_) => {}
-            _ => return false,
+fn is_safe_target(target: &std::path::Path, base_dir: &std::path::Path) -> bool {
+    let mut current = target.to_path_buf();
+    let mut safe = false;
+    
+    if let Ok(canon_base) = base_dir.canonicalize() {
+        while let Some(parent) = current.parent() {
+            if let Ok(canon_current) = current.canonicalize() {
+                safe = canon_current.starts_with(&canon_base);
+                break;
+            }
+            current = parent.to_path_buf();
+        }
+        
+        if !safe {
+            let t_str = target.to_string_lossy().to_lowercase();
+            let b_str = canon_base.to_string_lossy().to_lowercase();
+            if t_str.starts_with(&b_str) && !t_str.contains("..") {
+                safe = true;
+            }
         }
     }
-    true
+    safe
 }
 
 fn get_base_games_dir() -> PathBuf {
@@ -81,7 +95,7 @@ fn handle_http_get(stream: &mut TcpStream, raw_path: &str, base_dir: &std::path:
     let file_path_str = decoded.trim_start_matches('/');
     
     let target = base_dir.join(file_path_str);
-    let is_safe = is_safe_path(file_path_str);
+    let is_safe = is_safe_target(&target, base_dir);
 
     if !is_safe {
         let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -924,7 +938,7 @@ impl ApplicationHandler<AppEvent> for App {
                     
                     let base_dir = get_base_games_dir();
                     let target = base_dir.join(file_path_str);
-                    let is_safe = is_safe_path(file_path_str);
+                    let is_safe = is_safe_target(&target, &base_dir);
 
                     if !is_safe {
                         return wry::http::Response::builder()
