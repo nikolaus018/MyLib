@@ -6,7 +6,7 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
-use wry::WebViewBuilder;
+use wry::{WebViewBuilder, WebContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
@@ -309,6 +309,7 @@ enum ReqMessage {
 struct App {
     window: Option<Window>,
     webview: Option<wry::WebView>,
+    web_context: Option<wry::WebContext>,
     state: Option<LibraryState>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
     running_games: HashMap<String, (std::time::Instant, std::time::Instant, Option<u32>)>,
@@ -327,6 +328,7 @@ impl App {
         Self {
             window: None,
             webview: None,
+            web_context: None,
             state: None,
             proxy,
             running_games: HashMap::new(),
@@ -924,7 +926,16 @@ impl ApplicationHandler<AppEvent> for App {
                 start_gilrs_polling(gamepad_proxy, h_rx);
             });
             
-            let builder = WebViewBuilder::new();
+            let data_dir = match ProjectDirs::from("com", "MyLib", "MyLib") {
+                Some(proj_dirs) => proj_dirs.data_local_dir().join("webview2"),
+                None => PathBuf::from("mylib-data").join("webview2"),
+            };
+            if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                eprintln!("Failed to create webview2 data directory: {}", e);
+            }
+            self.web_context = Some(WebContext::new(Some(data_dir)));
+
+            let builder = WebViewBuilder::new_with_web_context(self.web_context.as_mut().unwrap());
             
             let webview = builder
                 .with_html(include_str!("index.html"))
