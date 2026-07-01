@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyLib — Game Library</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0d0e12;
+            --bg-deep: #07080b;
+            --panel: rgba(18, 20, 27, 0.88);
+            --panel-edge: rgba(229, 193, 88, 0.12);
+            --case: rgba(255, 255, 255, 0.018);
+            --case-hover: rgba(229, 193, 88, 0.055);
+            --brass: #e5c158;
+            --brass-bright: #f4db8b;
+            --brass-glow: rgba(229, 193, 88, 0.25);
+            --brass-dim: rgba(229, 193, 88, 0.55);
+            --accent-rust: #c15c3d;
+            --text: #f0f1f5;
+            --text-muted: #9098a8;
+            --text-faint: #474d5a;
+            --danger: #b84343;
+            --danger-bright: #d95a5a;
+            --focus: #e5c158;
+            --success: #2ebd7f;
+            --display-font: 'Cinzel', serif;
+            --body-font: 'Plus Jakarta Sans', sans-serif;
+            --shelf-w: 300px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        html, body { height: 100%; }
+
+        body {
+            background: var(--bg-deep);
+            color: var(--text);
+            font-family: var(--body-font);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* ── Ambient glows ── */
+        .ambient-glow {
+            position: fixed;
+            width: 700px; height: 700px;
+            background: radial-gradient(circle, rgba(229,193,88,0.07) 0%, transparent 70%);
+            top: -250px; right: -150px;
+            z-index: 0; pointer-events: none;
+            filter: blur(100px);
+            animation: pulse-glow 14s infinite alternate ease-in-out;
+        }
+        .ambient-glow-2 {
+            position: fixed;
+            width: 800px; height: 800px;
+            background: radial-gradient(circle, rgba(193,92,61,0.05) 0%, transparent 70%);
+            bottom: -300px; left: -250px;
+            z-index: 0; pointer-events: none;
+            filter: blur(130px);
+            animation: pulse-glow 18s infinite alternate-reverse ease-in-out;
+        }
+        @keyframes pulse-glow {
+            0%   { transform: scale(1) translate(0,0); opacity: 0.5; }
+            100% { transform: scale(1.2) translate(40px, 30px); opacity: 0.85; }
+        }
+
+        /* Vignette */
+        body::before {
+            content: "";
+            position: fixed; inset: 0;
+            pointer-events: none; z-index: 5;
+            background: radial-gradient(ellipse at 50% 50%, transparent 15%, rgba(7,8,11,0.85) 100%);
+        }
+
+        /* ── Banner layers ── */
+        #banner-bg {
+            position: absolute; inset: 0;
+            background-size: cover; background-position: center;
+            opacity: 0.18; z-index: -1;
+            filter: blur(40px) saturate(0.7) brightness(0.35);
+            transform: scale(1.08);
+            transition: background-image 0.9s cubic-bezier(0.16,1,0.3,1);
+            pointer-events: none;
+        }
+        #banner-img {
+            position: absolute; inset: 0;
+            width: 100%; height: 100%;
+            object-fit: cover; z-index: 0;
+            /* Single-direction mask — WebView2 compatible (no mask-composite) */
+            -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 35%, rgba(0,0,0,0.85) 65%, black 100%);
+            mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.5) 35%, rgba(0,0,0,0.85) 65%, black 100%);
+            opacity: 0.38;
+            transition: opacity 0.7s ease, transform 1.1s cubic-bezier(0.16,1,0.3,1);
+            pointer-events: none;
+        }
+
+        /* ── Titlebar ── */
+        #titlebar {
+            position: absolute; top: 0; left: 0; right: 0; height: 32px;
+            background: transparent;
+            display: flex; justify-content: flex-end; align-items: center;
+            z-index: 1000;
+        }
+        #titlebar-drag {
+            flex: 1; height: 100%;
+        }
+        .titlebar-btn {
+            width: 46px; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .titlebar-btn:hover { background: rgba(255,255,255,0.1); }
+        #titlebar-close:hover { background: var(--danger); }
+        .titlebar-btn svg { width: 10px; height: 10px; stroke: var(--text-muted); stroke-width: 1.5; }
+        .titlebar-btn:hover svg { stroke: #fff; }
+
+        /* ── Shelf ── */
+        #shelf {
+            width: var(--shelf-w);
+            flex-shrink: 0;
+            background: rgba(10,11,15,0.82);
+            backdrop-filter: blur(32px);
+            -webkit-backdrop-filter: blur(32px);
+            border-right: 1px solid var(--panel-edge);
+            display: flex; flex-direction: column;
+            z-index: 10; position: relative;
+        }
+
+        #shelf-header {
+            padding: 42px 22px 20px;
+            border-bottom: 1px solid rgba(229,193,88,0.07);
+            display: flex; flex-direction: column; gap: 4px;
+        }
+
+        .wordmark-row {
+            display: flex; align-items: baseline; gap: 10px;
+        }
+        .wordmark {
+            font-family: var(--display-font);
+            font-size: 22px; font-weight: 900;
+            letter-spacing: 6px; text-transform: uppercase;
+            color: #ffffff;
+        }
+        .wordmark span { color: var(--brass); text-shadow: 0 0 18px rgba(229,193,88,0.35); }
+        .game-count-badge {
+            font-size: 10px; font-weight: 700;
+            letter-spacing: 1.5px; text-transform: uppercase;
+            color: var(--text-faint);
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            padding: 2px 8px; border-radius: 20px;
+        }
+        .tagline {
+            font-size: 9px; letter-spacing: 3px;
+            text-transform: uppercase; color: var(--text-faint);
+            font-weight: 700;
+        }
+
+        /* Search bar */
+        #search-wrap {
+            padding: 12px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        #search-input {
+            width: 100%;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: var(--body-font);
+            font-size: 12px;
+            padding: 8px 12px 8px 32px;
+            outline: none;
+            transition: all 0.2s cubic-bezier(0.16,1,0.3,1);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23474d5a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: 10px center;
+            background-size: 14px;
+        }
+        #search-input::placeholder { color: var(--text-faint); }
+        #search-input:focus, body.show-focus #search-input.focused {
+            border-color: rgba(229,193,88,0.3);
+            background-color: rgba(0,0,0,0.5);
+            box-shadow: 0 0 14px rgba(229,193,88,0.1);
+        }
+
+        /* Case list */
+        #case-list {
+            flex: 1; overflow-y: auto; overflow-x: hidden;
+            padding: 12px 10px;
+            display: flex; flex-direction: column; gap: 4px;
+            scrollbar-width: none;
+        }
+        #case-list::-webkit-scrollbar { display: none; }
+
+        .case {
+            display: flex; align-items: center;
+            height: 58px; border-radius: 7px;
+            background: var(--case); cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.024);
+            overflow: hidden;
+            transition: all 0.22s cubic-bezier(0.16,1,0.3,1);
+            position: relative; flex-shrink: 0;
+        }
+        .case:hover {
+            background: var(--case-hover);
+            border-color: rgba(229,193,88,0.18);
+            transform: translateX(3px);
+        }
+        .case .spine-tab {
+            width: 3px; height: 100%;
+            background: transparent; flex-shrink: 0;
+            transition: all 0.2s ease;
+        }
+        .case .case-art {
+            width: 38px; height: 38px; margin-left: 10px;
+            border-radius: 5px; object-fit: contain;
+            background: rgba(0,0,0,0.5); flex-shrink: 0;
+            border: 1px solid rgba(255,255,255,0.04);
+            transition: all 0.2s ease;
+        }
+        .case:hover .case-art { border-color: rgba(229,193,88,0.3); }
+        .case .case-art-fallback {
+            width: 38px; height: 38px; margin-left: 10px;
+            border-radius: 5px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-family: var(--display-font); font-weight: 700; font-size: 16px;
+            color: var(--brass);
+            background: linear-gradient(135deg, rgba(229,193,88,0.1), rgba(193,92,61,0.1));
+            border: 1px solid rgba(229,193,88,0.15);
+            transition: all 0.2s ease;
+        }
+        .case:hover .case-art-fallback {
+            border-color: var(--brass);
+            box-shadow: 0 0 10px rgba(229,193,88,0.1);
+        }
+        .case .case-info {
+            margin: 0 10px; flex: 1; min-width: 0;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        .case .case-name {
+            font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text-muted); transition: color 0.2s;
+        }
+        .case .case-playtime {
+            font-size: 10px; font-weight: 500; color: var(--text-faint);
+            letter-spacing: 0.5px;
+        }
+        .case.selected {
+            background: rgba(229,193,88,0.055);
+            border-color: rgba(229,193,88,0.32);
+            transform: translateX(5px);
+        }
+        .case.selected .spine-tab {
+            background: linear-gradient(180deg, var(--brass) 0%, var(--accent-rust) 100%);
+        }
+        .case.selected .case-name { color: #ffffff; font-weight: 700; }
+        .case .status-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--success); margin-right: 12px;
+            box-shadow: 0 0 8px var(--success);
+            flex-shrink: 0; display: none;
+            animation: pulse-dot 1.8s infinite;
+        }
+        @keyframes pulse-dot {
+            0%   { transform: scale(0.9); opacity: 0.6; }
+            50%  { transform: scale(1.3); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+        .case-hidden { display: none !important; }
+
+        /* No results */
+        #no-results {
+            display: none; text-align: center; padding: 24px 0;
+            color: var(--text-faint); font-size: 12px; letter-spacing: 0.5px;
+        }
+
+        /* Shelf footer */
+        #shelf-footer {
+            padding: 14px 10px;
+            border-top: 1px solid rgba(229,193,88,0.07);
+            display: flex; gap: 8px; align-items: center;
+        }
+        #add-game-btn {
+            flex: 1; padding: 11px;
+            border-radius: 6px;
+            background: rgba(229,193,88,0.03);
+            border: 1.5px dashed rgba(229,193,88,0.18);
+            text-align: center; font-size: 10px; font-weight: 800;
+            letter-spacing: 2px; text-transform: uppercase;
+            color: var(--brass); cursor: pointer;
+            transition: all 0.22s ease;
+        }
+        #add-game-btn:hover {
+            border-color: var(--brass);
+            background: rgba(229,193,88,0.07);
+            color: #ffffff;
+            box-shadow: 0 0 18px rgba(229,193,88,0.1);
+        }
+        #sort-btn {
+            width: 36px; height: 36px; border-radius: 6px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.07);
+            color: var(--text-faint); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-shrink: 0;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        #sort-btn:hover { border-color: rgba(229,193,88,0.25); color: var(--brass); }
+        #sort-btn.active { border-color: rgba(229,193,88,0.35); color: var(--brass); }
+
+        /* Sort dropdown */
+        #sort-menu {
+            position: absolute;
+            bottom: calc(100% + 6px); right: 0;
+            background: rgba(18,20,27,0.98);
+            border: 1px solid rgba(229,193,88,0.18);
+            border-radius: 8px; padding: 6px;
+            display: none; flex-direction: column; gap: 2px;
+            min-width: 170px; z-index: 50;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.7);
+            backdrop-filter: blur(20px);
+        }
+        #sort-menu.open { display: flex; }
+        .sort-option {
+            padding: 8px 12px; border-radius: 5px;
+            font-size: 12px; font-weight: 600; color: var(--text-muted);
+            cursor: pointer; transition: all 0.15s;
+            white-space: nowrap; letter-spacing: 0.3px;
+        }
+        .sort-option:hover { background: rgba(229,193,88,0.07); color: var(--text); }
+        .sort-option.selected { color: var(--brass); background: rgba(229,193,88,0.06); }
+
+        /* Focus system */
+        body.show-focus .case.focused {
+            outline: none; border-color: var(--brass-bright);
+            box-shadow: 0 0 0 2px var(--brass-bright), 0 0 25px rgba(229,193,88,0.4);
+            background: rgba(229,193,88,0.15); transform: translateX(8px);
+        }
+        body.show-focus .btn.focused {
+            outline: none; border-color: var(--brass-bright);
+            box-shadow: 0 0 0 2px var(--brass-bright), 0 0 20px rgba(229,193,88,0.3);
+            transform: translateY(-3px);
+        }
+        body.show-focus #add-game-btn.focused {
+            border-color: var(--focus);
+            box-shadow: 0 0 0 1px var(--focus), 0 0 14px rgba(229,193,88,0.25);
+        }
+
+        /* ── Main area ── */
+        #main-area {
+            flex: 1; position: relative;
+            display: flex; flex-direction: column; justify-content: flex-end;
+            padding: 64px 72px 52px;
+            z-index: 1; min-width: 0;
+        }
+
+        /* ── Empty state ── */
+        #empty-state {
+            margin: auto; text-align: center;
+            color: var(--text-faint);
+            animation: fade-in-up 0.6s ease;
+        }
+        .empty-ring {
+            width: 120px; height: 120px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(229,193,88,0.1);
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 28px;
+            position: relative;
+            animation: ring-pulse 3s infinite ease-in-out;
+        }
+        .empty-ring::before {
+            content: "";
+            position: absolute; inset: -10px;
+            border-radius: 50%;
+            border: 1px solid rgba(229,193,88,0.05);
+            animation: ring-pulse 3s infinite ease-in-out 0.4s;
+        }
+        @keyframes ring-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.06); opacity: 1; }
+        }
+        .empty-glyph {
+            font-family: var(--display-font);
+            font-size: 32px; font-weight: 900;
+            letter-spacing: 6px; text-transform: uppercase;
+            color: rgba(229,193,88,0.18);
+            text-shadow: 0 0 30px rgba(229,193,88,0.12);
+        }
+        #empty-state h2 {
+            font-size: 16px; font-weight: 700;
+            color: var(--text-muted); letter-spacing: 1px;
+            text-transform: uppercase; margin-bottom: 8px;
+        }
+        #empty-state p {
+            font-size: 13px; color: var(--text-faint);
+            letter-spacing: 0.3px; margin-bottom: 28px;
+        }
+        .empty-cta {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 28px; border-radius: 6px;
+            background: rgba(229,193,88,0.06);
+            border: 1px solid rgba(229,193,88,0.25);
+            color: var(--brass); font-size: 11px;
+            font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+            cursor: pointer; transition: all 0.22s ease;
+        }
+        .empty-cta:hover {
+            background: rgba(229,193,88,0.12);
+            border-color: var(--brass);
+            box-shadow: 0 0 20px rgba(229,193,88,0.12);
+            color: #ffffff;
+        }
+
+        /* ── Top-right game name ── */
+        #stage-top-right {
+            position: absolute; top: 56px; right: 72px;
+            text-align: right; z-index: 10;
+            display: none;
+            animation: fade-in-up 0.6s cubic-bezier(0.16,1,0.3,1);
+        }
+        .tr-game-name {
+            font-family: var(--display-font);
+            font-size: 20px; font-weight: 900;
+            color: rgba(255,255,255,0.6);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .tr-divider {
+            width: 32px; height: 2px;
+            background: var(--brass-dim); 
+            margin: 10px 0 10px auto;
+        }
+        .tr-tagline {
+            font-size: 9px; font-weight: 800;
+            letter-spacing: 4px; color: var(--text-faint);
+            text-transform: uppercase;
+        }
+
+        /* ── Stage ── */
+        #stage-content {
+            display: none;
+            animation: fade-in-up 0.45s cubic-bezier(0.16,1,0.3,1);
+            position: relative; z-index: 10;
+        }
+        @keyframes fade-in-up {
+            from { transform: translateY(18px); opacity: 0; }
+            to   { transform: translateY(0); opacity: 1; }
+        }
+
+        .eyebrow {
+            font-size: 9px; font-weight: 800;
+            letter-spacing: 4px; text-transform: uppercase;
+            color: var(--accent-rust); margin-bottom: 14px;
+        }
+
+        #main-logo {
+            max-width: 400px; max-height: 140px;
+            object-fit: contain; object-position: left bottom;
+            margin-bottom: 20px;
+            filter: drop-shadow(0 12px 28px rgba(0,0,0,0.9));
+        }
+        #main-title {
+            font-family: var(--display-font);
+            font-size: 52px; font-weight: 900;
+            letter-spacing: 1px; margin-bottom: 20px;
+            text-shadow: 0 4px 24px rgba(0,0,0,0.9);
+            line-height: 1.08;
+            background: linear-gradient(135deg, #ffffff 0%, #c4c9d4 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Metadata pills row */
+        .meta-pills {
+            display: flex; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 28px;
+        }
+        .meta-pill {
+            display: flex; align-items: center; gap: 7px;
+            background: rgba(13,14,18,0.75);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 20px; padding: 6px 14px;
+            font-size: 11px; color: var(--text-muted);
+            font-weight: 500; letter-spacing: 0.3px;
+            backdrop-filter: blur(12px);
+            transition: all 0.2s cubic-bezier(0.16,1,0.3,1);
+        }
+        .meta-pill:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(229,193,88,0.25);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .meta-pill .pill-icon {
+            font-size: 11px; opacity: 0.6;
+        }
+        .meta-pill .pill-label {
+            color: var(--text-faint); font-size: 9px;
+            text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700;
+        }
+        .meta-pill .pill-val {
+            color: var(--text); font-weight: 600;
+        }
+        .meta-pill.accent {
+            border-color: rgba(229,193,88,0.15);
+            background: rgba(229,193,88,0.04);
+        }
+        .meta-pill.accent .pill-val { color: var(--brass-bright); }
+
+        /* Action buttons */
+        .actions {
+            display: flex; gap: 14px; align-items: center;
+        }
+        .btn {
+            background: rgba(255,255,255,0.03);
+            color: var(--text); padding: 13px 30px;
+            border-radius: 5px; font-size: 11px; font-weight: 800;
+            text-transform: uppercase; letter-spacing: 2px;
+            border: 1px solid rgba(255,255,255,0.08);
+            cursor: pointer;
+            transition: all 0.22s cubic-bezier(0.16,1,0.3,1);
+            display: inline-flex; align-items: center; gap: 8px;
+            position: relative; z-index: 15;
+            font-family: var(--body-font);
+        }
+        .btn:hover {
+            background: rgba(255,255,255,0.08);
+            border-color: rgba(229,193,88,0.28);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+        }
+        @keyframes play-pulse {
+            0% { box-shadow: 0 0 35px rgba(229,193,88,0.4); filter: brightness(1); }
+            50% { box-shadow: 0 0 70px rgba(229,193,88,0.9), 0 0 25px rgba(255,255,255,0.7); filter: brightness(1.35); }
+            100% { box-shadow: 0 0 35px rgba(229,193,88,0.4); filter: brightness(1); }
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--brass) 0%, #a67c1e 100%);
+            color: #07080a; border-color: var(--brass); font-weight: 900;
+            box-shadow: 0 0 24px rgba(229,193,88,0.18);
+        }
+        .btn-primary:hover, body.show-focus .btn-primary.focused {
+            background: linear-gradient(135deg, var(--brass-bright) 0%, #c49429 100%);
+            border-color: var(--brass-bright);
+            animation: play-pulse 1.8s infinite ease-in-out;
+            z-index: 20;
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, var(--danger) 0%, #872828 100%);
+            color: #ffffff; border-color: var(--danger);
+            box-shadow: 0 0 20px rgba(184,67,67,0.15);
+        }
+        .btn-danger:hover {
+            background: linear-gradient(135deg, var(--danger-bright) 0%, #a63737 100%);
+            border-color: var(--danger-bright);
+            box-shadow: 0 0 28px rgba(184,67,67,0.3);
+        }
+        .btn-ghost {
+            background: transparent;
+            border-color: rgba(255,255,255,0.1);
+        }
+        .btn-ghost:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.18);
+        }
+
+        /* ── Modal ── */
+        #modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(6,7,9,0.88);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            z-index: 2000; display: none;
+            justify-content: center; align-items: center;
+        }
+        #modal {
+            background: rgba(16,18,24,0.97);
+            border: 1px solid rgba(229,193,88,0.14);
+            padding: 34px 38px; border-radius: 10px;
+            width: 520px; max-width: 92%; max-height: 88vh;
+            overflow-y: auto;
+            box-shadow: 0 32px 90px rgba(0,0,0,0.88), 0 0 40px rgba(229,193,88,0.03);
+            display: flex; flex-direction: column; gap: 20px;
+        }
+        #modal::-webkit-scrollbar { width: 5px; }
+        #modal::-webkit-scrollbar-thumb { background: rgba(229,193,88,0.1); border-radius: 3px; }
+        #modal-title-row {
+            display: flex; align-items: baseline; justify-content: space-between;
+            border-bottom: 1px solid rgba(229,193,88,0.1); padding-bottom: 14px;
+        }
+        #modal h2 {
+            font-family: var(--display-font); font-size: 22px; font-weight: 900;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #ffffff 0%, #b8bdc7 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .form-group { display: flex; flex-direction: column; gap: 8px; }
+        .form-group label {
+            font-size: 9px; text-transform: uppercase;
+            letter-spacing: 2.5px; color: var(--brass); font-weight: 800;
+        }
+        input[type="text"] {
+            background: rgba(0,0,0,0.45);
+            border: 1px solid rgba(255,255,255,0.07);
+            color: #ffffff; padding: 12px 14px;
+            border-radius: 5px; font-size: 14px; outline: none;
+            font-family: var(--body-font);
+            transition: all 0.2s ease; width: 100%;
+        }
+        input[type="text"]:focus, input[type="text"].focused {
+            border-color: var(--focus);
+            box-shadow: 0 0 0 1px var(--focus), 0 0 12px rgba(229,193,88,0.1);
+            background: rgba(0,0,0,0.55);
+        }
+        input[type="text"]::placeholder { color: var(--text-faint); }
+        input[type="text"].invalid {
+            border-color: var(--danger-bright) !important;
+            box-shadow: 0 0 0 1px var(--danger-bright), 0 0 12px rgba(184,67,67,0.2) !important;
+            animation: shake 0.35s cubic-bezier(0.36,0.07,0.19,0.97);
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-6px); }
+            40% { transform: translateX(6px); }
+            60% { transform: translateX(-4px); }
+            80% { transform: translateX(4px); }
+        }
+        .file-picker { display: flex; gap: 10px; }
+        .file-path {
+            flex: 1; background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(255,255,255,0.06);
+            padding: 11px 14px; border-radius: 5px;
+            color: var(--text-muted); font-size: 12px;
+            overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+            display: flex; align-items: center;
+        }
+        .file-path.invalid {
+            border-color: var(--danger-bright) !important;
+            box-shadow: 0 0 0 1px var(--danger-bright), 0 0 12px rgba(184,67,67,0.2) !important;
+            animation: shake 0.35s cubic-bezier(0.36,0.07,0.19,0.97);
+        }
+        .file-picker .btn {
+            padding: 11px 18px; font-size: 10px;
+            letter-spacing: 1.5px; flex-shrink: 0;
+        }
+        .modal-actions {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-top: 4px; border-top: 1px solid rgba(229,193,88,0.1);
+            padding-top: 20px;
+        }
+        .modal-actions .btn { font-size: 10px; padding: 11px 22px; }
+        .modal-actions-right { display: flex; gap: 10px; }
+        #modal-delete-btn { display: none; }
+
+        /* ── Confirm-delete inline modal ── */
+        #confirm-overlay {
+            position: fixed; inset: 0;
+            background: rgba(6,7,9,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 3000; display: none;
+            justify-content: center; align-items: center;
+        }
+        #confirm-box {
+            background: rgba(16,18,24,0.98);
+            border: 1px solid rgba(184,67,67,0.3);
+            border-radius: 10px; padding: 36px 40px;
+            width: 420px; max-width: 90%;
+            box-shadow: 0 24px 80px rgba(0,0,0,0.9), 0 0 40px rgba(184,67,67,0.06);
+            display: flex; flex-direction: column; gap: 20px; text-align: center;
+        }
+        #confirm-box h3 {
+            font-family: var(--display-font); font-size: 18px; font-weight: 900;
+            color: #ffffff; letter-spacing: 0.5px;
+        }
+        #confirm-box p {
+            font-size: 13px; color: var(--text-muted); line-height: 1.6;
+            font-weight: 400;
+        }
+        #confirm-box p strong { color: var(--text); font-weight: 700; }
+        .confirm-actions {
+            display: flex; gap: 12px; justify-content: center;
+        }
+
+        /* ── Resize handles ── */
+        .resize-edge { position: fixed; z-index: 9999; }
+        .resize-top { top: 0; left: 0; right: 0; height: 6px; cursor: n-resize; }
+        .resize-bottom { bottom: 0; left: 0; right: 0; height: 6px; cursor: s-resize; }
+        .resize-left { top: 0; bottom: 0; left: 0; width: 6px; cursor: w-resize; }
+        .resize-right { top: 0; bottom: 0; right: 0; width: 6px; cursor: e-resize; }
+        .resize-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nw-resize; }
+        .resize-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: ne-resize; }
+        .resize-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: sw-resize; }
+        .resize-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: se-resize; }
+
+        /* ── Gamepad HUD ── */
+        #gamepad-hud {
+            position: fixed; bottom: 24px; right: 28px;
+            display: flex; gap: 18px; align-items: center;
+            z-index: 50; pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        body.show-focus #gamepad-hud { opacity: 1; }
+        .hud-hint {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 10px; font-weight: 600;
+            color: var(--text-faint); letter-spacing: 0.5px;
+        }
+        .hud-key {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 4px; padding: 2px 7px;
+            font-size: 10px; font-weight: 800;
+            color: rgba(255,255,255,0.5); letter-spacing: 0;
+        }
+        .hud-sep {
+            width: 1px; height: 14px;
+            background: rgba(255,255,255,0.08);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Resize Handles -->
+    <div class="resize-edge resize-top" data-dir="n"></div>
+    <div class="resize-edge resize-bottom" data-dir="s"></div>
+    <div class="resize-edge resize-left" data-dir="w"></div>
+    <div class="resize-edge resize-right" data-dir="e"></div>
+    <div class="resize-edge resize-nw" data-dir="nw"></div>
+    <div class="resize-edge resize-ne" data-dir="ne"></div>
+    <div class="resize-edge resize-sw" data-dir="sw"></div>
+    <div class="resize-edge resize-se" data-dir="se"></div>
+
+    <!-- Custom Titlebar -->
+    <div id="titlebar">
+        <div id="titlebar-drag"></div>
+        <div class="titlebar-btn" id="titlebar-min"><svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"/></svg></div>
+        <div class="titlebar-btn" id="titlebar-max"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none"/></svg></div>
+        <div class="titlebar-btn" id="titlebar-close"><svg viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5"/></svg></div>
+    </div>
+
+    <div class="ambient-glow"></div>
+    <div class="ambient-glow-2"></div>
+    <div id="banner-bg"></div>
+
+    <div id="shelf">
+        <div id="shelf-header">
+            <div class="wordmark-row">
+                <div class="wordmark">MY<span>LIB</span></div>
+                <div class="game-count-badge" id="game-count-badge">0 games</div>
+            </div>
+            <div class="tagline">Game Library</div>
+        </div>
+
+        <div id="search-wrap">
+            <input type="text" id="search-input" class="navigable" placeholder="Search games…" autocomplete="off" spellcheck="false">
+        </div>
+
+        <div id="case-list"></div>
+        <div id="no-results">No games match your search.</div>
+
+        <div id="shelf-footer">
+            <div id="add-game-btn" class="navigable" tabindex="0">+ Add Game</div>
+            <div id="sort-btn" class="navigable" tabindex="0" title="Sort games">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+                <div id="sort-menu">
+                    <div class="sort-option selected" data-sort="name">Name A → Z</div>
+                    <div class="sort-option" data-sort="recent">Recently Played</div>
+                    <div class="sort-option" data-sort="playtime">Most Played</div>
+                    <div class="sort-option" data-sort="added">Date Added</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="main-area">
+        <img id="banner-img" src="" alt="" onerror="this.style.display='none'">
+
+        <div id="stage-top-right">
+            <div class="tr-game-name" id="tr-game-name">Cyberpunk 2077</div>
+            <div class="tr-divider"></div>
+            <div class="tr-tagline">Library</div>
+        </div>
+
+        <div id="empty-state">
+            <div class="empty-ring">
+                <div class="empty-glyph">ML</div>
+            </div>
+            <h2>Your shelf is empty</h2>
+            <p>Add a game to begin building your library.</p>
+            <div class="empty-cta" id="empty-add-btn">+ Add Your First Game</div>
+        </div>
+
+        <div id="stage-content">
+            <div class="eyebrow">Now Selected</div>
+            <img id="main-logo" src="" alt="" onerror="this.style.display='none'">
+            <div id="main-title">Welcome to MyLib</div>
+
+            <div class="meta-pills" id="meta-pills">
+                <div class="meta-pill">
+                    <span class="pill-icon">▶</span>
+                    <span class="pill-label">Last Played</span>
+                    <span class="pill-val" id="last-played-val">Never</span>
+                </div>
+                <div class="meta-pill accent">
+                    <span class="pill-icon">⏱</span>
+                    <span class="pill-label">Playtime</span>
+                    <span class="pill-val" id="playtime-val">—</span>
+                </div>
+                <div class="meta-pill" id="meta-path-pill">
+                    <span class="pill-icon">📁</span>
+                    <span class="pill-val" id="meta-path-val" style="font-size:10px; opacity:0.7; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                </div>
+            </div>
+
+            <div class="actions">
+                <div id="play-btn" class="btn btn-primary navigable" tabindex="0">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+                    Play
+                </div>
+                <div id="stop-btn" class="btn btn-danger navigable" tabindex="0" style="display:none;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14"></rect></svg>
+                    Stop
+                </div>
+                <div id="edit-game-btn" class="btn btn-ghost navigable" tabindex="0">Edit Details</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add / Edit Game Modal -->
+    <div id="modal-overlay">
+        <div id="modal">
+            <div id="modal-title-row">
+                <h2 id="modal-title">Add Game</h2>
+            </div>
+            <div class="form-group">
+                <label>Game Name</label>
+                <input type="text" id="game-name-input" class="navigable" placeholder="e.g. Cyberpunk 2077">
+            </div>
+            <div class="form-group">
+                <label>Executable (.exe)</label>
+                <div class="file-picker">
+                    <div id="game-exe-path" class="file-path">No file selected…</div>
+                    <div id="browse-exe-btn" class="btn navigable">Browse</div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Logo (optional)</label>
+                <div class="file-picker">
+                    <div id="game-logo-path" class="file-path">Extracted automatically…</div>
+                    <div id="browse-logo-btn" class="btn navigable">Browse</div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Banner (optional)</label>
+                <div class="file-picker">
+                    <div id="game-banner-path" class="file-path">No banner selected…</div>
+                    <div id="browse-banner-btn" class="btn navigable">Browse</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <div id="modal-delete-btn" class="btn btn-danger navigable">Delete Game</div>
+                <div class="modal-actions-right">
+                    <div id="modal-cancel-btn" class="btn btn-ghost navigable">Cancel</div>
+                    <div id="modal-save-btn" class="btn btn-primary navigable">Save</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- In-app Delete Confirmation -->
+    <div id="confirm-overlay">
+        <div id="confirm-box">
+            <h3>Remove Game</h3>
+            <p>Remove <strong id="confirm-game-name"></strong> from your library? This cannot be undone.</p>
+            <div class="confirm-actions">
+                <div id="confirm-cancel-btn" class="btn btn-ghost navigable">Keep It</div>
+                <div id="confirm-delete-btn" class="btn btn-danger navigable">Remove</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gamepad / Keyboard HUD -->
+    <div id="gamepad-hud">
+        <div class="hud-hint">
+            <span class="hud-key">↑↓</span> Navigate
+        </div>
+        <div class="hud-sep"></div>
+        <div class="hud-hint">
+            <span class="hud-key">A</span> Select
+        </div>
+        <div class="hud-sep"></div>
+        <div class="hud-hint">
+            <span class="hud-key">B</span> Back
+        </div>
+        <div class="hud-sep"></div>
+        <div class="hud-hint">
+            <span class="hud-key">X</span> Edit
+        </div>
+    </div>
+
+    <script>
+        let games = [];
+        let displayGames = []; // sorted + filtered view
+        let runningGames = new Set();
+        let selectedIndex = 0;   // index into `games` array
+        let isModalOpen = false;
+        let isConfirmOpen = false;
+        let focusIndex = 0;
+        let navigables = [];
+        let editingGameId = null;
+        let currentSort = 'name';
+        let searchQuery = '';
+
+        let exePath = "";
+        let logoPath = "";
+        let bannerPath = "";
+        let serverPort = 0;
+
+        // ── Rust → JS IPC ──
+        window.receiveMessage = function(dataStr) {
+            try {
+                const msg = JSON.parse(dataStr);
+                if (msg.type === "init") {
+                    games = msg.games;
+                    serverPort = msg.port;
+                    applySort();
+                    renderShelf();
+                    selectGameById(games.length > 0 ? games[0].id : null);
+                    updateNavigables();
+                } else if (msg.type === "exe_selected") {
+                    exePath = msg.path || "";
+                    document.getElementById('game-exe-path').innerText = exePath || "No file selected…";
+                    document.getElementById('game-exe-path').classList.remove('invalid');
+                } else if (msg.type === "logo_selected") {
+                    logoPath = msg.path || "";
+                    document.getElementById('game-logo-path').innerText = logoPath || "Extracted automatically…";
+                } else if (msg.type === "banner_selected") {
+                    bannerPath = msg.path || "";
+                    document.getElementById('game-banner-path').innerText = bannerPath || "No banner selected…";
+                } else if (msg.type === "games_updated") {
+                    games = msg.games;
+                    const currentIds = new Set(games.map(g => g.id));
+                    for (let id of runningGames) {
+                        if (!currentIds.has(id)) runningGames.delete(id);
+                    }
+                    applySort();
+                    renderShelf();
+                    // Re-select same game if still present, else first
+                    const currentGame = games.find(g => g.id === getSelectedId());
+                    if (currentGame) {
+                        selectGameById(currentGame.id);
+                    } else {
+                        selectGameById(games.length > 0 ? games[0].id : null);
+                        if (!isModalOpen && !isConfirmOpen && games.length > 0) {
+                            setTimeout(() => {
+                                const caseIdx = navigables.findIndex(el => el.classList.contains('case') && el.dataset.idx == "0");
+                                if (caseIdx !== -1) {
+                                    focusIndex = caseIdx;
+                                    applyFocus();
+                                }
+                            }, 50);
+                        }
+                    }
+                    updateNavigables();
+                } else if (msg.type === "game_status") {
+                    if (msg.status === "running") {
+                        runningGames.add(msg.id);
+                    } else {
+                        runningGames.delete(msg.id);
+                    }
+                    renderShelf();
+                    updateGameButtons();
+                    updateNavigables();
+                } else if (msg.type === "gamepad_input") {
+                    document.body.classList.add('show-focus');
+                    if (msg.action === "up") handleNavigate('up');
+                    else if (msg.action === "down") handleNavigate('down');
+                    else if (msg.action === "left") handleNavigate('left');
+                    else if (msg.action === "right") handleNavigate('right');
+                    else if (msg.action === "a") handleSelect();
+                    else if (msg.action === "b") handleBack();
+                    else if (msg.action === "x") {
+                        if (!isModalOpen) {
+                            const g = getSelectedGame();
+                            if (g) openModal(g);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to parse IPC message", e);
+            }
+        };
+
+        // ── JS → Rust IPC ──
+        function sendToRust(msg) {
+            if (window.ipc && window.ipc.postMessage) {
+                window.ipc.postMessage(JSON.stringify(msg));
+            } else {
+                console.warn("IPC not available. Message:", msg);
+            }
+        }
+
+        const IS_WINDOWS = navigator.userAgent.includes('Windows');
+        function assetUrl(path) {
+            if (!path) return "";
+            const clean = path.replace(/\\/g, '/');
+            const encoded = clean.split('/').map(encodeURIComponent).join('/');
+            if (serverPort) return `http://127.0.0.1:${serverPort}/${encoded}`;
+            return (IS_WINDOWS ? "https://asset.localhost/" : "asset://localhost/") + encoded;
+        }
+
+        // ── Helpers ──
+        function getSelectedId() {
+            const game = displayGames[selectedIndex];
+            return game ? game.id : null;
+        }
+        function getSelectedGame() {
+            return displayGames[selectedIndex] || null;
+        }
+
+        function formatPlaytime(seconds) {
+            if (!seconds || seconds === 0) return "0m";
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            if (h > 0) return `${h}h ${m}m`;
+            return `${m}m`;
+        }
+
+        // ── Sort & Filter ──
+        function applySort() {
+            let sorted = [...games];
+            if (currentSort === 'name') {
+                sorted.sort((a, b) => a.name.localeCompare(b.name));
+            } else if (currentSort === 'recent') {
+                sorted.sort((a, b) => {
+                    if (!a.last_played && !b.last_played) return 0;
+                    if (!a.last_played) return 1;
+                    if (!b.last_played) return -1;
+                    return b.last_played.localeCompare(a.last_played);
+                });
+            } else if (currentSort === 'playtime') {
+                sorted.sort((a, b) => (b.playtime_seconds || 0) - (a.playtime_seconds || 0));
+            } else if (currentSort === 'added') {
+                sorted.sort((a, b) => {
+                    if (!a.date_added && !b.date_added) return 0;
+                    if (!a.date_added) return 1;
+                    if (!b.date_added) return -1;
+                    return b.date_added.localeCompare(a.date_added);
+                });
+            }
+            displayGames = sorted;
+        }
+
+        function applySearch() {
+            const q = searchQuery.toLowerCase();
+            let hasVisible = false;
+            document.querySelectorAll('.case').forEach((el, i) => {
+                const game = displayGames[i];
+                if (!game) return;
+                const matches = !q || game.name.toLowerCase().includes(q);
+                el.classList.toggle('case-hidden', !matches);
+                if (matches) hasVisible = true;
+            });
+            document.getElementById('no-results').style.display = hasVisible || !q ? 'none' : 'block';
+        }
+
+        // ── Shelf render ──
+        function renderShelf() {
+            const list = document.getElementById('case-list');
+            list.innerHTML = '';
+
+            const count = games.length;
+            document.getElementById('game-count-badge').textContent = `${count} game${count !== 1 ? 's' : ''}`;
+
+            displayGames.forEach((game, idx) => {
+                const el = document.createElement('div');
+                el.className = 'case navigable';
+                el.dataset.idx = idx;
+                el.dataset.id = game.id;
+
+                const tab = document.createElement('div');
+                tab.className = 'spine-tab';
+
+                const img = document.createElement('img');
+                img.className = 'case-art';
+                const fallback = document.createElement('div');
+                fallback.className = 'case-art-fallback';
+                fallback.textContent = (game.name || '?').trim().charAt(0).toUpperCase();
+                fallback.style.display = 'none';
+
+                if (game.logo_path) {
+                    img.src = assetUrl(game.logo_path);
+                    img.onerror = () => {
+                        img.style.display = 'none';
+                        fallback.style.display = 'flex';
+                    };
+                } else {
+                    img.style.display = 'none';
+                    fallback.style.display = 'flex';
+                }
+
+                const info = document.createElement('div');
+                info.className = 'case-info';
+
+                const title = document.createElement('div');
+                title.className = 'case-name';
+                title.innerText = game.name;
+
+                const pt = document.createElement('div');
+                pt.className = 'case-playtime';
+                if (game.playtime_seconds && game.playtime_seconds > 0) {
+                    pt.textContent = formatPlaytime(game.playtime_seconds);
+                } else {
+                    pt.textContent = game.last_played ? `Played ${game.last_played}` : 'Not played yet';
+                }
+
+                info.appendChild(title);
+                info.appendChild(pt);
+
+                const dot = document.createElement('div');
+                dot.className = 'status-dot';
+                if (runningGames.has(game.id)) dot.style.display = 'block';
+
+                el.appendChild(tab);
+                el.appendChild(img);
+                el.appendChild(fallback);
+                el.appendChild(info);
+                el.appendChild(dot);
+
+                el.onclick = () => {
+                    selectGame(idx);
+                    setFocusTo(el);
+                };
+
+                if (idx === selectedIndex) el.classList.add('selected');
+                list.appendChild(el);
+            });
+
+            applySearch();
+        }
+
+        function updateGameButtons() {
+            const game = getSelectedGame();
+            if (!game) return;
+            const playBtn = document.getElementById('play-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            if (runningGames.has(game.id)) {
+                playBtn.style.display = 'none';
+                stopBtn.style.display = 'flex';
+            } else {
+                playBtn.style.display = 'flex';
+                stopBtn.style.display = 'none';
+            }
+        }
+
+        function selectGameById(id) {
+            if (!id) {
+                selectedIndex = 0;
+            } else {
+                const idx = displayGames.findIndex(g => g.id === id);
+                selectedIndex = idx >= 0 ? idx : 0;
+            }
+            selectGame(selectedIndex);
+        }
+
+        function selectGame(idx) {
+            const empty = document.getElementById('empty-state');
+            const stage = document.getElementById('stage-content');
+
+            if (displayGames.length === 0) {
+                empty.style.display = 'flex';
+                empty.style.flexDirection = 'column';
+                empty.style.alignItems = 'center';
+                stage.style.display = 'none';
+                document.getElementById('banner-img').style.display = 'none';
+                document.getElementById('banner-bg').style.backgroundImage = 'none';
+                document.getElementById('stage-top-right').style.display = 'none';
+                return;
+            }
+
+            empty.style.display = 'none';
+            stage.style.display = 'block';
+            selectedIndex = Math.min(idx, displayGames.length - 1);
+            const game = displayGames[selectedIndex];
+
+            document.querySelectorAll('.case').forEach(el => el.classList.remove('selected'));
+            const items = document.querySelectorAll('.case');
+            if (items[selectedIndex]) items[selectedIndex].classList.add('selected');
+
+            // Banner
+            const bannerImg = document.getElementById('banner-img');
+            const bannerBg = document.getElementById('banner-bg');
+            if (game.banner_path) {
+                const src = assetUrl(game.banner_path);
+                bannerImg.src = src;
+                bannerImg.style.display = 'block';
+                bannerBg.style.backgroundImage = `url("${src}")`;
+            } else {
+                bannerImg.style.display = 'none';
+                bannerBg.style.backgroundImage = 'none';
+            }
+
+            // Logo / Title
+            const mainLogo = document.getElementById('main-logo');
+            const mainTitle = document.getElementById('main-title');
+            if (game.logo_path) {
+                mainLogo.onerror = () => {
+                    mainLogo.style.display = 'none';
+                    mainTitle.innerText = game.name;
+                    mainTitle.style.display = 'block';
+                };
+                mainLogo.src = assetUrl(game.logo_path);
+                mainLogo.style.display = 'block';
+                mainTitle.style.display = 'none';
+            } else {
+                mainLogo.style.display = 'none';
+                mainTitle.innerText = game.name;
+                mainTitle.style.display = 'block';
+            }
+
+            // Meta pills
+            document.getElementById('tr-game-name').innerText = game.name;
+            document.getElementById('stage-top-right').style.display = 'block';
+
+            document.getElementById('last-played-val').textContent = game.last_played || 'Never';
+            document.getElementById('playtime-val').textContent = formatPlaytime(game.playtime_seconds);
+
+            // Path pill — show only the filename for cleanliness
+            const pathVal = document.getElementById('meta-path-val');
+            const pathPill = document.getElementById('meta-path-pill');
+            if (game.exe_path) {
+                const parts = game.exe_path.replace(/\\/g, '/').split('/');
+                pathVal.textContent = parts[parts.length - 1];
+                pathVal.title = game.exe_path;
+                pathPill.style.display = 'flex';
+            } else {
+                pathPill.style.display = 'none';
+            }
+
+            updateGameButtons();
+        }
+
+        // ── Sort UI ──
+        const sortBtn = document.getElementById('sort-btn');
+        const sortMenu = document.getElementById('sort-menu');
+        sortBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sortMenu.classList.toggle('open');
+            sortBtn.classList.toggle('active', sortMenu.classList.contains('open'));
+        });
+        document.querySelectorAll('.sort-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                currentSort = opt.dataset.sort;
+                document.querySelectorAll('.sort-option').forEach(o => o.classList.remove('selected'));
+                opt.classList.add('selected');
+                sortMenu.classList.remove('open');
+                sortBtn.classList.remove('active');
+                const currentId = getSelectedId();
+                applySort();
+                renderShelf();
+                selectGameById(currentId);
+                updateNavigables();
+            });
+        });
+        document.addEventListener('click', () => {
+            sortMenu.classList.remove('open');
+            sortBtn.classList.remove('active');
+        });
+
+        // ── Search ──
+        document.getElementById('search-input').addEventListener('input', function() {
+            searchQuery = this.value;
+            applySearch();
+        });
+
+        // ── Navigation system ──
+        function updateNavigables() {
+            if (isConfirmOpen) {
+                navigables = Array.from(document.getElementById('confirm-overlay').querySelectorAll('.navigable'));
+            } else if (isModalOpen) {
+                navigables = Array.from(document.getElementById('modal').querySelectorAll('.navigable'));
+            } else {
+                navigables = Array.from(document.querySelectorAll('body > #shelf .navigable, body > #main-area .navigable')).filter(el => el.offsetParent !== null);
+            }
+            if (focusIndex >= navigables.length) focusIndex = 0;
+            navigables.forEach((el, index) => {
+                el.onmouseenter = () => {
+                    focusIndex = index;
+                    applyFocus(false);
+                };
+            });
+            applyFocus(false);
+        }
+
+        function applyFocus(shouldScroll = true) {
+            navigables.forEach(el => {
+                el.classList.remove('focused');
+                if (el.tagName === 'INPUT') el.blur();
+            });
+            if (navigables.length > 0) {
+                const el = navigables[focusIndex];
+                el.classList.add('focused');
+                if (el.tagName === 'INPUT') {
+                    el.focus();
+                } else if (shouldScroll && el.scrollIntoView) {
+                    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            }
+        }
+
+        function setFocusTo(element) {
+            const idx = navigables.indexOf(element);
+            if (idx !== -1) {
+                focusIndex = idx;
+                applyFocus(false);
+            }
+        }
+
+        function handleNavigate(direction) {
+            if (navigables.length === 0) return;
+            const currentEl = navigables[focusIndex];
+
+            if (isConfirmOpen) {
+                if (direction === 'left' || direction === 'up') focusIndex = Math.max(0, focusIndex - 1);
+                else if (direction === 'right' || direction === 'down') focusIndex = Math.min(navigables.length - 1, focusIndex + 1);
+            } else if (isModalOpen) {
+                if (direction === 'up') focusIndex = Math.max(0, focusIndex - 1);
+                else if (direction === 'down') focusIndex = Math.min(navigables.length - 1, focusIndex + 1);
+                else if (direction === 'left') {
+                    if (currentEl.id === 'modal-save-btn') focusIndex = navigables.findIndex(el => el.id === 'modal-cancel-btn');
+                    else if (currentEl.id === 'modal-cancel-btn') {
+                        const delIdx = navigables.findIndex(el => el.id === 'modal-delete-btn');
+                        if (delIdx !== -1 && document.getElementById('modal-delete-btn').style.display !== 'none') focusIndex = delIdx;
+                    }
+                }
+                else if (direction === 'right') {
+                    if (currentEl.id === 'modal-cancel-btn') focusIndex = navigables.findIndex(el => el.id === 'modal-save-btn');
+                    else if (currentEl.id === 'modal-delete-btn') focusIndex = navigables.findIndex(el => el.id === 'modal-cancel-btn');
+                }
+            } else {
+                if (direction === 'up') {
+                    if (currentEl.classList.contains('case')) {
+                        const currentIdx = parseInt(currentEl.dataset.idx, 10);
+                        if (currentIdx > 0) {
+                            const prevCaseIdx = navigables.findIndex(el => el.classList.contains('case') && parseInt(el.dataset.idx, 10) === currentIdx - 1);
+                            if (prevCaseIdx !== -1) { focusIndex = prevCaseIdx; selectGame(currentIdx - 1); }
+                        } else {
+                            const searchIdx = navigables.findIndex(el => el.id === 'search-input');
+                            if (searchIdx !== -1) focusIndex = searchIdx;
+                        }
+                    } else if (currentEl.id === 'add-game-btn' || currentEl.id === 'sort-btn') {
+                        const lastGameIdx = navigables.findLastIndex(el => el.classList.contains('case'));
+                        if (lastGameIdx !== -1) focusIndex = lastGameIdx;
+                    } else if (currentEl.id === 'search-input') {
+                        // Already at top
+                    } else if (currentEl.id === 'play-btn' || currentEl.id === 'stop-btn' || currentEl.id === 'edit-game-btn') {
+                        // Keep focus but don't move up
+                    }
+                } else if (direction === 'down') {
+                    if (currentEl.id === 'search-input') {
+                        const firstGameIdx = navigables.findIndex(el => el.classList.contains('case'));
+                        if (firstGameIdx !== -1) { focusIndex = firstGameIdx; selectGame(parseInt(navigables[firstGameIdx].dataset.idx, 10)); }
+                    } else if (currentEl.classList.contains('case')) {
+                        const currentIdx = parseInt(currentEl.dataset.idx, 10);
+                        if (currentIdx + 1 < displayGames.length) {
+                            const nextCaseIdx = navigables.findIndex(el => el.classList.contains('case') && parseInt(el.dataset.idx, 10) === currentIdx + 1);
+                            if (nextCaseIdx !== -1) { focusIndex = nextCaseIdx; selectGame(currentIdx + 1); }
+                        } else {
+                            const addBtnIdx = navigables.findIndex(el => el.id === 'add-game-btn');
+                            if (addBtnIdx !== -1) focusIndex = addBtnIdx;
+                        }
+                    }
+                } else if (direction === 'right') {
+                    if (currentEl.classList.contains('case') || currentEl.id === 'add-game-btn' || currentEl.id === 'search-input') {
+                        const actionIdx = navigables.findIndex(el => el.id === 'play-btn' || el.id === 'stop-btn');
+                        if (actionIdx !== -1) focusIndex = actionIdx;
+                    } else if (currentEl.id === 'play-btn' || currentEl.id === 'stop-btn') {
+                        const editIdx = navigables.findIndex(el => el.id === 'edit-game-btn');
+                        if (editIdx !== -1) focusIndex = editIdx;
+                    } else if (currentEl.id === 'add-game-btn') {
+                        const sortIdx = navigables.findIndex(el => el.id === 'sort-btn');
+                        if (sortIdx !== -1) focusIndex = sortIdx;
+                    }
+                } else if (direction === 'left') {
+                    if (currentEl.id === 'play-btn' || currentEl.id === 'stop-btn') {
+                        const gameIdx = navigables.findIndex(el =>
+                            el.classList.contains('case') && el.dataset.idx == selectedIndex);
+                        if (gameIdx !== -1) focusIndex = gameIdx;
+                    } else if (currentEl.id === 'edit-game-btn') {
+                        const actionIdx = navigables.findIndex(el => el.id === 'play-btn' || el.id === 'stop-btn');
+                        if (actionIdx !== -1) focusIndex = actionIdx;
+                    } else if (currentEl.id === 'sort-btn') {
+                        const addIdx = navigables.findIndex(el => el.id === 'add-game-btn');
+                        if (addIdx !== -1) focusIndex = addIdx;
+                    }
+                }
+            }
+            applyFocus();
+        }
+
+        function handleSelect() {
+            if (navigables.length === 0) return;
+            const el = navigables[focusIndex];
+            if (el.classList.contains('case')) {
+                selectGame(parseInt(el.dataset.idx, 10));
+                setTimeout(() => {
+                    const playIdx = navigables.findIndex(n => (n.id === 'play-btn' || n.id === 'stop-btn') && n.style.display !== 'none');
+                    if (playIdx !== -1) {
+                        focusIndex = playIdx;
+                        applyFocus();
+                    }
+                }, 50);
+            } else if (el.id === 'play-btn') {
+                const g = getSelectedGame();
+                if (g) {
+                    sendToRust({ type: 'launch_game', id: g.id });
+                    sendToRust({ type: 'window_close' });
+                }
+            } else if (el.id === 'stop-btn') {
+                const g = getSelectedGame();
+                if (g) sendToRust({ type: 'stop_game', id: g.id });
+            } else if (el.id === 'add-game-btn') {
+                openModal(null);
+            } else if (el.id === 'edit-game-btn') {
+                const g = getSelectedGame();
+                if (g) openModal(g);
+            } else if (el.id === 'browse-exe-btn') {
+                sendToRust({ type: 'select_exe' });
+            } else if (el.id === 'browse-logo-btn') {
+                sendToRust({ type: 'select_logo' });
+            } else if (el.id === 'browse-banner-btn') {
+                sendToRust({ type: 'select_banner' });
+            } else if (el.id === 'modal-cancel-btn') {
+                closeModal();
+            } else if (el.id === 'modal-save-btn') {
+                saveGame();
+            } else if (el.id === 'modal-delete-btn') {
+                promptDelete();
+            } else if (el.id === 'confirm-cancel-btn') {
+                closeConfirm();
+            } else if (el.id === 'confirm-delete-btn') {
+                if (editingGameId) {
+                    sendToRust({ type: 'delete_game', id: editingGameId });
+                    closeConfirm();
+                    closeModal();
+                }
+            } else if (el.id === 'sort-btn') {
+                const sorts = ['name', 'recent', 'playtime', 'added'];
+                let idx = sorts.indexOf(currentSort);
+                idx = (idx + 1) % sorts.length;
+                currentSort = sorts[idx];
+                document.querySelectorAll('.sort-option').forEach(o => {
+                    o.classList.toggle('selected', o.dataset.sort === currentSort);
+                });
+                const currentId = getSelectedId();
+                applySort();
+                renderShelf();
+                selectGameById(currentId);
+                updateNavigables();
+                sortMenu.classList.add('open');
+                setTimeout(() => sortMenu.classList.remove('open'), 1000);
+            }
+        }
+
+        function handleBack() {
+            if (isConfirmOpen) {
+                closeConfirm();
+            } else if (isModalOpen) {
+                closeModal();
+            } else if (navigables.length > 0) {
+                const currentEl = navigables[focusIndex];
+                if (currentEl.id === 'play-btn' || currentEl.id === 'stop-btn' || currentEl.id === 'edit-game-btn') {
+                    const gameIdx = navigables.findIndex(el =>
+                        el.classList.contains('case') && el.dataset.idx == selectedIndex);
+                    if (gameIdx !== -1) { focusIndex = gameIdx; applyFocus(); }
+                }
+            }
+        }
+
+        let lastFocusIndexBeforeModal = 0;
+
+        function openModal(game) {
+            isModalOpen = true;
+            lastFocusIndexBeforeModal = focusIndex;
+            document.getElementById('modal-overlay').style.display = 'flex';
+
+            if (game) {
+                document.getElementById('modal-title').innerText = "Edit Game";
+                editingGameId = game.id;
+                document.getElementById('game-name-input').value = game.name;
+                exePath = game.exe_path;
+                logoPath = game.logo_path || "";
+                bannerPath = game.banner_path || "";
+                document.getElementById('modal-delete-btn').style.display = 'inline-flex';
+            } else {
+                document.getElementById('modal-title').innerText = "Add Game";
+                editingGameId = null;
+                document.getElementById('game-name-input').value = "";
+                exePath = ""; logoPath = ""; bannerPath = "";
+                document.getElementById('modal-delete-btn').style.display = 'none';
+            }
+
+            document.getElementById('game-exe-path').innerText = exePath || "No file selected…";
+            document.getElementById('game-logo-path').innerText = logoPath || "Extracted automatically…";
+            document.getElementById('game-banner-path').innerText = bannerPath || "No banner selected…";
+            // Clear any validation state
+            document.getElementById('game-name-input').classList.remove('invalid');
+            document.getElementById('game-exe-path').classList.remove('invalid');
+
+            updateNavigables();
+            focusIndex = 0;
+            applyFocus();
+        }
+
+        function closeModal() {
+            isModalOpen = false;
+            document.getElementById('modal-overlay').style.display = 'none';
+            updateNavigables();
+            focusIndex = lastFocusIndexBeforeModal;
+            applyFocus();
+        }
+
+        function triggerInvalid(el) {
+            el.classList.remove('invalid');
+            void el.offsetWidth; // reflow to restart animation
+            el.classList.add('invalid');
+            setTimeout(() => el.classList.remove('invalid'), 800);
+        }
+
+        function saveGame() {
+            const name = document.getElementById('game-name-input').value.trim();
+            let valid = true;
+            if (!name) {
+                triggerInvalid(document.getElementById('game-name-input'));
+                valid = false;
+            }
+            if (!exePath) {
+                triggerInvalid(document.getElementById('game-exe-path'));
+                valid = false;
+            }
+            if (!valid) return;
+
+            sendToRust({
+                type: 'save_game',
+                id: editingGameId,
+                name,
+                exe_path: exePath,
+                logo_path: logoPath || null,
+                banner_path: bannerPath || null
+            });
+            closeModal();
+        }
+
+        // ── Delete confirmation ──
+        function promptDelete() {
+            if (!editingGameId) return;
+            const game = games.find(g => g.id === editingGameId);
+            document.getElementById('confirm-game-name').textContent = game ? game.name : 'this game';
+            document.getElementById('confirm-overlay').style.display = 'flex';
+            isConfirmOpen = true;
+            updateNavigables();
+            focusIndex = 0; // Focus on Keep It by default
+            applyFocus();
+        }
+
+        function closeConfirm() {
+            document.getElementById('confirm-overlay').style.display = 'none';
+            isConfirmOpen = false;
+            updateNavigables();
+            // Restore focus to delete button
+            const delBtnIdx = navigables.findIndex(el => el.id === 'modal-delete-btn');
+            if (delBtnIdx !== -1) focusIndex = delBtnIdx;
+            applyFocus();
+        }
+
+        document.getElementById('confirm-cancel-btn').onclick = closeConfirm;
+        document.getElementById('confirm-delete-btn').onclick = () => {
+            if (editingGameId) {
+                sendToRust({ type: 'delete_game', id: editingGameId });
+                closeConfirm();
+                closeModal();
+            }
+        };
+
+        // ── Mouse event wiring ──
+        document.querySelectorAll('.resize-edge').forEach(el => {
+            el.addEventListener('mousedown', (e) => {
+                if (e.buttons === 1) sendToRust({ type: 'window_resize', direction: el.dataset.dir });
+            });
+        });
+
+        let tbDragging = false;
+        let tbStartX = 0; let tbStartY = 0;
+
+        document.getElementById('titlebar-drag').addEventListener('mousedown', (e) => {
+            if (e.buttons === 1) {
+                tbDragging = true;
+                tbStartX = e.screenX;
+                tbStartY = e.screenY;
+            }
+        });
+        
+        document.getElementById('titlebar-drag').addEventListener('dblclick', () => {
+            sendToRust({ type: 'window_maximize' });
+        });
+        document.getElementById('titlebar-min').addEventListener('click', () => {
+            sendToRust({ type: 'window_minimize' });
+        });
+        document.getElementById('titlebar-max').addEventListener('click', () => {
+            sendToRust({ type: 'window_maximize' });
+        });
+        document.getElementById('titlebar-close').addEventListener('click', () => {
+            sendToRust({ type: 'window_close' });
+        });
+
+        document.getElementById('play-btn').onclick = () => {
+            const g = getSelectedGame();
+            if (g) {
+                sendToRust({ type: 'launch_game', id: g.id });
+                sendToRust({ type: 'window_close' });
+            }
+        };
+        document.getElementById('stop-btn').onclick = () => {
+            const g = getSelectedGame();
+            if (g) sendToRust({ type: 'stop_game', id: g.id });
+        };
+        document.getElementById('edit-game-btn').onclick = () => {
+            const g = getSelectedGame();
+            if (g) openModal(g);
+        };
+        document.getElementById('add-game-btn').onclick = () => openModal(null);
+        document.getElementById('empty-add-btn').onclick = () => openModal(null);
+        document.getElementById('browse-exe-btn').onclick = () => sendToRust({ type: 'select_exe' });
+        document.getElementById('browse-logo-btn').onclick = () => sendToRust({ type: 'select_logo' });
+        document.getElementById('browse-banner-btn').onclick = () => sendToRust({ type: 'select_banner' });
+        document.getElementById('modal-cancel-btn').onclick = () => closeModal();
+        document.getElementById('modal-save-btn').onclick = () => saveGame();
+        document.getElementById('modal-delete-btn').onclick = () => promptDelete();
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        window.addEventListener('keydown', (e) => {
+            // Don't intercept if typing in search (unless it's nav keys)
+            const inSearch = document.activeElement === document.getElementById('search-input');
+            if (inSearch && !['ArrowUp','ArrowDown','Escape'].includes(e.key)) return;
+
+            document.body.classList.add('show-focus');
+            if (e.key === 'ArrowUp')    { e.preventDefault(); handleNavigate('up'); }
+            if (e.key === 'ArrowDown')  { e.preventDefault(); handleNavigate('down'); }
+            if (e.key === 'ArrowLeft')  handleNavigate('left');
+            if (e.key === 'ArrowRight') handleNavigate('right');
+            if (e.key === 'Enter')      handleSelect();
+            if (e.key === 'Escape')     { handleBack(); closeConfirm(); sortMenu.classList.remove('open'); }
+            if ((e.key === 'e' || e.key === 'E') && !isModalOpen) {
+                const g = getSelectedGame();
+                if (g) openModal(g);
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            document.body.classList.remove('show-focus');
+            if (tbDragging) {
+                const dx = Math.abs(e.screenX - tbStartX);
+                const dy = Math.abs(e.screenY - tbStartY);
+                if (dx > 4 || dy > 4) {
+                    tbDragging = false;
+                    sendToRust({ type: 'window_drag' });
+                }
+            }
+        });
+        window.addEventListener('mousedown', () => {
+            document.body.classList.remove('show-focus');
+        });
+        window.addEventListener('mouseup', () => {
+            tbDragging = false;
+        });
+
+        // Kick off
+        setTimeout(() => sendToRust({ type: 'ready' }), 100);
+    </script>
+</body>
+</html>
