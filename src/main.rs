@@ -28,13 +28,23 @@ pub enum AppEvent {
     ToggleWindow,
 }
 
+fn get_base_games_dir() -> PathBuf {
+    match ProjectDirs::from("com", "MyLib", "MyLib") {
+        Some(proj_dirs) => proj_dirs.data_local_dir().join("games"),
+        None => PathBuf::from("mylib-data").join("games"),
+    }
+}
+
 fn start_http_server() -> Option<u16> {
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
     
+    let base_dir = get_base_games_dir();
+    
     thread::spawn(move || {
         for stream in listener.incoming() {
             if let Ok(mut stream) = stream {
+                let base_dir_clone = base_dir.clone();
                 thread::spawn(move || {
                     let mut buffer = [0; 4096];
                     if let Ok(size) = stream.read(&mut buffer) {
@@ -44,7 +54,7 @@ fn start_http_server() -> Option<u16> {
                             let parts: Vec<&str> = req_line.split_whitespace().collect();
                             if parts.len() >= 2 && parts[0] == "GET" {
                                 let path = parts[1];
-                                handle_http_get(&mut stream, path);
+                                handle_http_get(&mut stream, path, &base_dir_clone);
                             }
                         }
                     }
@@ -56,13 +66,25 @@ fn start_http_server() -> Option<u16> {
     Some(port)
 }
 
-fn handle_http_get(stream: &mut TcpStream, raw_path: &str) {
+fn handle_http_get(stream: &mut TcpStream, raw_path: &str, base_dir: &PathBuf) {
     let decoded = percent_encoding::percent_decode_str(raw_path).decode_utf8_lossy().to_string();
-    let file_path = decoded.trim_start_matches('/');
+    let file_path_str = decoded.trim_start_matches('/');
     
-    match std::fs::read(file_path) {
+    let target = base_dir.join(file_path_str);
+    let is_safe = target.canonicalize().and_then(|canon_target| {
+        base_dir.canonicalize().map(|canon_base| canon_target.starts_with(&canon_base))
+    }).unwrap_or(false);
+
+    if !is_safe {
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+        return;
+    }
+    
+    match std::fs::read(&target) {
         Ok(content) => {
-            let lower = file_path.to_lowercase();
+            let lower = target.to_string_lossy().to_lowercase();
             let mime = if lower.ends_with(".png") {
                 "image/png"
             } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
@@ -172,23 +194,22 @@ impl LibraryState {
                 eprintln!("Failed to ensure data dir '{}' exists: {}", parent.display(), e);
             }
         }
-        match fs::write(&self.data_path, content) {
+        let tmp_path = self.data_path.with_extension("json.tmp");
+        if let Err(e) = fs::write(&tmp_path, &content) {
+            eprintln!("Failed to write tmp file '{}': {}", tmp_path.display(), e);
+            return false;
+        }
+        match fs::rename(&tmp_path, &self.data_path) {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("Failed to write '{}': {}", self.data_path.display(), e);
+                eprintln!("Failed to rename tmp file to '{}': {}", self.data_path.display(), e);
                 false
             }
         }
     }
 
-    /// Directory where a game's logo/banner assets are stored. Falls back to a
-    /// sibling "games" dir next to the binary's working directory if the data
-    /// path unexpectedly has no parent (should not happen in practice).
     pub fn game_assets_dir(&self, game_id: &str) -> PathBuf {
-        self.data_path
-            .parent()
-            .map(|p| p.join("games").join(game_id))
-            .unwrap_or_else(|| PathBuf::from("games").join(game_id))
+        get_base_games_dir().join(game_id)
     }
 }
 
@@ -255,11 +276,12 @@ struct App {
     webview: Option<wry::WebView>,
     state: Option<LibraryState>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-    running_games: HashMap<String, (std::time::SystemTime, std::time::SystemTime)>,
+    running_games: HashMap<String, (std::time::Instant, std::time::Instant, Option<u32>)>,
     http_port: u16,
     sys: System,
     is_focused: bool,
     tray_icon: Option<tray_icon::TrayIcon>,
+    cursor_pos: Option<winit::dpi::PhysicalPosition<f64>>,
 }
 
 impl App {
@@ -275,6 +297,7 @@ impl App {
             sys: System::new_all(),
             is_focused: true,
             tray_icon: None,
+            cursor_pos: None,
         }
     }
 
@@ -307,7 +330,7 @@ impl App {
             return;
         }
 
-        self.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        self.sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::nothing());
         
         let mut finished_ids = Vec::new();
         
@@ -315,7 +338,7 @@ impl App {
             let mut data = state.load();
             let mut data_changed = false;
             
-            for (id, (start_time, last_update)) in self.running_games.iter_mut() {
+            for (id, (start_time, last_update, tracked_pid)) in self.running_games.iter_mut() {
                 if let Some(game) = data.games.iter_mut().find(|g| &g.id == id) {
                     let path = std::path::Path::new(&game.exe_path);
                     if let Some(file_name_os) = path.file_name() {
@@ -323,20 +346,28 @@ impl App {
                         let exe_name_lower = exe_name.to_lowercase();
                         
                         let mut is_running = false;
-                        for proc in self.sys.processes().values() {
-                            if proc.name().to_string_lossy().to_lowercase() == exe_name_lower {
+                        if let Some(pid) = tracked_pid {
+                            if self.sys.process(sysinfo::Pid::from_u32(*pid)).is_some() {
                                 is_running = true;
-                                break;
                             }
                         }
                         
-                        let elapsed_from_start = start_time.elapsed().unwrap_or(std::time::Duration::from_secs(0));
+                        if !is_running {
+                            for proc in self.sys.processes().values() {
+                                if proc.name().to_string_lossy().to_lowercase() == exe_name_lower {
+                                    is_running = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        let elapsed_from_start = start_time.elapsed();
                         if !is_running {
                             if elapsed_from_start.as_secs() > 5 {
                                 finished_ids.push(id.clone());
                             }
                         } else {
-                            let elapsed = last_update.elapsed().unwrap_or(std::time::Duration::from_secs(0));
+                            let elapsed = last_update.elapsed();
                             let add_secs = elapsed.as_secs();
                             if add_secs >= 1 {
                                 game.playtime_seconds = Some(game.playtime_seconds.unwrap_or(0) + add_secs);
@@ -403,10 +434,10 @@ impl App {
                             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
                             
                             match cmd.spawn() {
-                                Ok(_) => {
+                                Ok(child) => {
                                     println!("Successfully launched {}", game.name);
-                                    let now = std::time::SystemTime::now();
-                                    self.running_games.insert(id.clone(), (now, now));
+                                    let now = std::time::Instant::now();
+                                    self.running_games.insert(id.clone(), (now, now, Some(child.id())));
                                     self.send_to_webview(&ResMessage::GameStatus {
                                         id: id.clone(),
                                         status: "running".to_string(),
@@ -422,8 +453,8 @@ impl App {
                                         ps.current_dir(current_dir);
                                     }
                                     if let Ok(_) = ps.spawn() {
-                                        let now = std::time::SystemTime::now();
-                                        self.running_games.insert(id.clone(), (now, now));
+                                        let now = std::time::Instant::now();
+                                        self.running_games.insert(id.clone(), (now, now, None));
                                         self.send_to_webview(&ResMessage::GameStatus {
                                             id: id.clone(),
                                             status: "running".to_string(),
@@ -435,24 +466,46 @@ impl App {
                     }
                 }
                 ReqMessage::StopGame { id } => {
-                    if let Some((_start_time, last_update)) = self.running_games.remove(&id) {
+                    if let Some((_start_time, last_update, pid_opt)) = self.running_games.remove(&id) {
                         if let Some(state) = &mut self.state {
                             let mut data = state.load();
                             if let Some(game) = data.games.iter_mut().find(|g| g.id == id) {
-                                let path = std::path::Path::new(&game.exe_path);
-                                if let Some(file_name_os) = path.file_name() {
-                                    let exe_name = file_name_os.to_string_lossy().to_string();
-                                    let exe_name_lower = exe_name.to_lowercase();
+                                self.sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::nothing());
+                                
+                                if let Some(pid) = pid_opt {
+                                    let root_pid = sysinfo::Pid::from_u32(pid);
+                                    let mut to_kill = vec![root_pid];
                                     
-                                    self.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-                                    for proc in self.sys.processes().values() {
-                                        if proc.name().to_string_lossy().to_lowercase() == exe_name_lower {
+                                    // Find descendants
+                                    for (p_id, proc) in self.sys.processes() {
+                                        if let Some(parent_id) = proc.parent() {
+                                            if to_kill.contains(&parent_id) {
+                                                to_kill.push(*p_id);
+                                            }
+                                        }
+                                    }
+                                    
+                                    for p_id in to_kill {
+                                        if let Some(proc) = self.sys.process(p_id) {
                                             proc.kill();
+                                        }
+                                    }
+                                } else {
+                                    // Fallback to name if PID was not tracked (e.g. powershell launch)
+                                    let path = std::path::Path::new(&game.exe_path);
+                                    if let Some(file_name_os) = path.file_name() {
+                                        let exe_name = file_name_os.to_string_lossy().to_string();
+                                        let exe_name_lower = exe_name.to_lowercase();
+                                        
+                                        for proc in self.sys.processes().values() {
+                                            if proc.name().to_string_lossy().to_lowercase() == exe_name_lower {
+                                                proc.kill();
+                                            }
                                         }
                                     }
                                 }
 
-                                let elapsed = last_update.elapsed().unwrap_or(std::time::Duration::from_secs(0));
+                                let elapsed = last_update.elapsed();
                                 let add_secs = elapsed.as_secs();
                                 if add_secs > 0 {
                                     game.playtime_seconds = Some(game.playtime_seconds.unwrap_or(0) + add_secs);
@@ -615,6 +668,17 @@ impl App {
                     if let Some(window) = &self.window {
                         if window.is_maximized() {
                             window.set_maximized(false);
+                            if let Some(cursor_pos) = self.cursor_pos {
+                                // Calculate the proportional X position of the cursor
+                                // If the window restores to 800 width, we want the cursor to roughly be in the same relative X
+                                // However, simple approach: just put the window's top center at the cursor.
+                                let size = window.outer_size();
+                                let mut pos = cursor_pos.clone();
+                                // Assuming titlebar height is ~32px, place top-left so cursor is in the titlebar.
+                                pos.x -= (size.width as f64) / 2.0;
+                                pos.y -= 10.0;
+                                window.set_outer_position(winit::dpi::PhysicalPosition::new(pos.x as i32, pos.y as i32));
+                            }
                         }
                         let _ = window.drag_window();
                     }
@@ -722,15 +786,29 @@ impl ApplicationHandler<AppEvent> for App {
                 .with_custom_protocol("asset".into(), move |_id, request| {
                     let path = request.uri().path().to_string();
                     let decoded = percent_encoding::percent_decode_str(&path).decode_utf8_lossy().to_string();
-                    let file_path = decoded.trim_start_matches('/');
+                    let file_path_str = decoded.trim_start_matches('/');
+                    
+                    let base_dir = get_base_games_dir();
+                    let target = base_dir.join(file_path_str);
+                    let is_safe = target.canonicalize().and_then(|canon_target| {
+                        base_dir.canonicalize().map(|canon_base| canon_target.starts_with(&canon_base))
+                    }).unwrap_or(false);
 
-                    match std::fs::read(file_path) {
+                    if !is_safe {
+                        return wry::http::Response::builder()
+                            .status(403)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(Vec::new().into())
+                            .expect("building a 403 response must not fail");
+                    }
+
+                    match std::fs::read(&target) {
                         Ok(content) => {
                             let mut response = wry::http::Response::builder()
                                 .status(200)
                                 .header("Access-Control-Allow-Origin", "*");
 
-                            let lower = file_path.to_lowercase();
+                            let lower = target.to_string_lossy().to_lowercase();
                             if lower.ends_with(".png") {
                                 response = response.header("Content-Type", "image/png");
                             } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
@@ -744,15 +822,15 @@ impl ApplicationHandler<AppEvent> for App {
                             }
 
                             response.body(content.into()).unwrap_or_else(|e| {
-                                eprintln!("asset protocol: failed to build response for {}: {}", file_path, e);
+                                eprintln!("asset protocol: failed to build response for {}: {}", file_path_str, e);
                                 wry::http::Response::builder()
                                     .status(500)
                                     .body(Vec::new().into())
-                                    .expect("building a fallback empty response must not fail")
+                                     .expect("building a fallback empty response must not fail")
                             })
                         }
                         Err(e) => {
-                            eprintln!("asset protocol: could not read '{}': {}", file_path, e);
+                            eprintln!("asset protocol: could not read '{}': {}", file_path_str, e);
                             wry::http::Response::builder()
                                 .status(404)
                                 .header("Access-Control-Allow-Origin", "*")
@@ -779,6 +857,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Focused(focused) => {
                 self.is_focused = focused;
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_pos = Some(position);
             }
             _ => {}
         }
